@@ -304,6 +304,50 @@ pub async fn has_enrolled(conn: &Connection, username: &str) -> Result<bool, Str
     }
 }
 
+/// Name and scan type of the default fingerprint device (e.g. `Goodix MOC (press)`), for
+/// diagnostics.
+///
+/// # Errors
+///
+/// Returns a description if fprintd can't be reached or has no device.
+pub async fn device_description(conn: &Connection) -> Result<String, String> {
+    // fprintd is D-Bus activated and exits when idle; start it like fprintd-list does.
+    conn.call_method(
+        Some("org.freedesktop.DBus"),
+        "/org/freedesktop/DBus",
+        Some("org.freedesktop.DBus"),
+        "StartServiceByName",
+        &(SERVICE, 0u32),
+    )
+    .await
+    .map_err(|e| format!("fprintd is not installed or can't start: {e}"))?;
+    let owner = name_owner(conn)
+        .await
+        .map_err(|e| format!("GetNameOwner: {e}"))?;
+    let device = default_device(conn, &owner)
+        .await
+        .map_err(|e| format!("GetDefaultDevice: {e}"))?;
+    let mut parts = Vec::new();
+    for property in ["name", "scan-type"] {
+        let reply = conn
+            .call_method(
+                Some(owner.as_str()),
+                device.as_str(),
+                Some("org.freedesktop.DBus.Properties"),
+                "Get",
+                &(DEVICE_IFACE, property),
+            )
+            .await
+            .map_err(|e| format!("Get {property}: {e}"))?;
+        let value: zbus::zvariant::OwnedValue = reply
+            .body()
+            .deserialize()
+            .map_err(|e| format!("{property} reply: {e}"))?;
+        parts.push(String::try_from(value).map_err(|e| format!("{property}: {e}"))?);
+    }
+    Ok(format!("{} ({})", parts[0], parts[1]))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

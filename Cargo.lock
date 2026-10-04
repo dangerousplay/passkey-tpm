@@ -999,8 +999,11 @@ name = "passkey-tpm-cli"
 version = "0.1.0"
 dependencies = [
  "passkey-tpm-tpm",
+ "passkey-tpm-uv",
  "passkey-tpm-wire",
+ "tokio",
  "tss-esapi",
+ "zbus",
 ]
 
 [[package]]

@@ -13,6 +13,9 @@ publish = false
 passkey-tpm-tpm = { path = "../passkey-tpm-tpm" }
 passkey-tpm-wire = { path = "../passkey-tpm-wire" }
 tss-esapi = "7.7"
+passkey-tpm-uv = { path = "../passkey-tpm-uv" }
+zbus = { version = "5.19", default-features = false, features = ["tokio"] }
+tokio = { version = "1.53", features = ["rt"] }
 
 [lints]
 workspace = true
