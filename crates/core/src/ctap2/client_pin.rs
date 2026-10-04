@@ -174,7 +174,8 @@ impl<T: TpmOps> Authenticator<T> {
     }
 
     /// Decrements and persists the retry counter, then has the TPM check `pinHashEnc`
-    /// (CTAP 2.1 §6.5.5.7.2). Returns the verified PIN hash.
+    /// (CTAP 2.1 §6.5.5.7.2). Returns the verified PIN hash. Only a wrong PIN keeps the
+    /// decrement; any other TPM error restores the counter (HARD-03).
     fn check_pin(
         &mut self,
         uid: Uid,
@@ -220,7 +221,14 @@ impl<T: TpmOps> Authenticator<T> {
                     status::PIN_INVALID
                 })
             }
-            Err(e) => Err(map_tpm_error(e)),
+            Err(e) => {
+                // The TPM never compared the PIN (DA lockout, TPM gone): the attempt wasn't
+                // made, so give the retry back. A lockout maps to PIN_AUTH_BLOCKED (temporary).
+                self.tpm
+                    .set_pin_retries(uid, retries)
+                    .map_err(map_tpm_error)?;
+                Err(map_tpm_error(e))
+            }
         }
     }
 

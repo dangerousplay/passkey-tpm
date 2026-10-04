@@ -22,6 +22,8 @@ struct MockTpm {
     resident: HashMap<u32, Vec<ResidentEntry>>,
     resets: Vec<u32>,
     revoked: Vec<Vec<u8>>,
+    /// Forced `verify_pin` outcome (TPM-wide lockout, TPM gone) before any comparison.
+    verify_error: Option<TpmError>,
 }
 
 impl TpmOps for MockTpm {
@@ -122,6 +124,9 @@ impl TpmOps for MockTpm {
         Ok(())
     }
     fn verify_pin(&mut self, uid: Uid, pin_hash: &[u8; 16]) -> Result<(), TpmError> {
+        if let Some(e) = self.verify_error {
+            return Err(e);
+        }
         match self.pins.get(&uid.0) {
             Some(p) if p == pin_hash => Ok(()),
             Some(_) => Err(TpmError::WrongPin),
@@ -665,6 +670,48 @@ fn wrong_pins_decrement_retries_then_block() {
         done(prep(&mut fresh, ALICE, &p.token_using_uv(0x03, RP)))[0],
         status::PIN_BLOCKED
     );
+}
+
+#[test]
+fn pin_retries_survive_a_check_the_tpm_never_ran() {
+    // HARD-03: a TPM-wide DA lockout (maybe caused by another user) or a TPM failure
+    // means the PIN was never compared, so this user's retry must not be burnt.
+    for (error, code) in [
+        (TpmError::Lockout, status::PIN_AUTH_BLOCKED),
+        (TpmError::Unavailable, status::OTHER),
+    ] {
+        let mut a = auth();
+        set_pin(&mut a, ALICE, Protocol::Two);
+        a.tpm_mut().retries.insert(ALICE.0, 3);
+        a.tpm_mut().verify_error = Some(error);
+        let p = Platform::new(&mut a, ALICE, Protocol::Two);
+        assert_eq!(
+            done(prep(&mut a, ALICE, &p.token_using_pin(PIN, 0x03, Some(RP))))[0],
+            code,
+            "{error:?} via getPinUvAuthTokenUsingPin"
+        );
+        assert_eq!(a.tpm_mut().retries[&ALICE.0], 3, "{error:?}: token");
+        let p = Platform::new(&mut a, ALICE, Protocol::Two);
+        assert_eq!(
+            done(prep(&mut a, ALICE, &p.change_pin(PIN, b"654321")))[0],
+            code,
+            "{error:?} via changePIN"
+        );
+        assert_eq!(a.tpm_mut().retries[&ALICE.0], 3, "{error:?}: changePIN");
+
+        // Once the TPM answers again, a wrong PIN still costs a retry.
+        a.tpm_mut().verify_error = None;
+        let p = Platform::new(&mut a, ALICE, Protocol::Two);
+        assert_eq!(
+            done(prep(
+                &mut a,
+                ALICE,
+                &p.token_using_pin(b"000000", 0x03, Some(RP))
+            ))[0],
+            status::PIN_INVALID
+        );
+        assert_eq!(a.tpm_mut().retries[&ALICE.0], 2, "{error:?}: wrong PIN");
+    }
 }
 
 #[test]
