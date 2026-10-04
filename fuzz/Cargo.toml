@@ -1,0 +1,60 @@
+[package]
+name = "passkey-tpm-fuzz"
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+passkey-tpm-wire = { path = "../crates/passkey-tpm-wire" }
+passkey-tpm-core = { path = "../crates/passkey-tpm-core" }
+
+# Separate workspace: fuzzing builds with nightly and sanitizers and is never shipped.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "wire_reader"
+path = "fuzz_targets/wire_reader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "credid_decode"
+path = "fuzz_targets/credid_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "gatestore_decode"
+path = "fuzz_targets/gatestore_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cbor_decode"
+path = "fuzz_targets/cbor_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ctaphid_assembler"
+path = "fuzz_targets/ctaphid_assembler.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "resident_decode"
+path = "fuzz_targets/resident_decode.rs"
+test = false
+doc = false
+bench = false
