@@ -61,6 +61,11 @@ pub const INSTALL: &[(&str, &str, u32)] = &[
         0o644,
     ),
     (
+        "packaging/modules-load/passkey-tpm.conf",
+        "{prefix}/lib/modules-load.d/passkey-tpm.conf",
+        0o644,
+    ),
+    (
         "packaging/sysusers/passkey-tpm.conf",
         "{prefix}/lib/sysusers.d/passkey-tpm.conf",
         0o644,
@@ -181,8 +186,25 @@ fn version() -> Result<String> {
         .ok_or_else(|| Error::Msg("workspace version not found".into()))
 }
 
+/// Where a source file is read from: built artefacts (`target/...`) come from Cargo's
+/// target directory, which honours `CARGO_TARGET_DIR`; everything else from the workspace.
+fn source_path(ws: &Path, target_dir: &Path, src: &str) -> PathBuf {
+    match src.strip_prefix("target/") {
+        Some(rest) => target_dir.join(rest),
+        None => ws.join(src),
+    }
+}
+
+fn cargo_target_dir(ws: &Path) -> PathBuf {
+    match std::env::var_os("CARGO_TARGET_DIR") {
+        Some(dir) => ws.join(dir), // absolute paths replace `ws` in `join`
+        None => ws.join("target"),
+    }
+}
+
 fn install(root: &Path, prefix: &str, libexecdir: &str) -> Result {
     let ws = workspace_root();
+    let target_dir = cargo_target_dir(&ws);
     for (src, dest, mode) in INSTALL {
         let target = root.join(destination(dest, prefix, libexecdir));
         if let Some(parent) = target.parent() {
@@ -190,15 +212,16 @@ fn install(root: &Path, prefix: &str, libexecdir: &str) -> Result {
                 .map_err(|e| Error::Msg(format!("{}: {e}", parent.display())))?;
         }
         if references_libexec(src) {
-            let text =
-                fs::read_to_string(ws.join(src)).map_err(|e| Error::Msg(format!("{src}: {e}")))?;
+            let text = fs::read_to_string(source_path(&ws, &target_dir, src))
+                .map_err(|e| Error::Msg(format!("{src}: {e}")))?;
             let rewritten = text.replace(
                 "/usr/libexec/passkey-tpm/",
                 &format!("{libexecdir}/passkey-tpm/"),
             );
             fs::write(&target, rewritten).map_err(|e| Error::Msg(format!("{src}: {e}")))?;
         } else {
-            fs::copy(ws.join(src), &target).map_err(|e| Error::Msg(format!("{src}: {e}")))?;
+            fs::copy(source_path(&ws, &target_dir, src), &target)
+                .map_err(|e| Error::Msg(format!("{src}: {e}")))?;
         }
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&target, fs::Permissions::from_mode(*mode))
@@ -268,6 +291,20 @@ mod tests {
         assert_eq!(
             destination("{libexecdir}/passkey-tpm/a", "/usr", "/usr/lib"),
             PathBuf::from("usr/lib/passkey-tpm/a")
+        );
+    }
+
+    #[test]
+    fn built_artefacts_come_from_the_cargo_target_dir() {
+        let ws = Path::new("/src/ws");
+        let target = Path::new("/build/target");
+        assert_eq!(
+            source_path(ws, target, "target/release/passkey-tpm-uvd"),
+            PathBuf::from("/build/target/release/passkey-tpm-uvd")
+        );
+        assert_eq!(
+            source_path(ws, target, "README.md"),
+            PathBuf::from("/src/ws/README.md")
         );
     }
 

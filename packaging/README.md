@@ -11,6 +11,7 @@ Distribution-neutral integration files for passkey-tpm. Install paths:
 | `polkit/50-passkey-tpm-fprintd.rules` | `/usr/share/polkit-1/rules.d/` |
 | `udev/70-passkey-tpm-uhid.rules` | `/usr/lib/udev/rules.d/` |
 | `sysusers/passkey-tpm.conf` | `/usr/lib/sysusers.d/` |
+| `modules-load/passkey-tpm.conf` | `/usr/lib/modules-load.d/` (loads `uhid`) |
 
 Binaries go to `/usr/libexec/passkey-tpm/` (Debian: `/usr/libexec` is fine since bookworm).
 Users need no group membership: the broker is the only TPM client and the agent gets

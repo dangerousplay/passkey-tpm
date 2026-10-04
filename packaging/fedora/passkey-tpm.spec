@@ -63,6 +63,7 @@ cargo run --offline -q -p xtask -- dist --no-build --destdir %{buildroot} --pref
 %{_datadir}/polkit-1/rules.d/50-passkey-tpm-fprintd.rules
 %{_udevrulesdir}/70-passkey-tpm-uhid.rules
 %{_sysusersdir}/passkey-tpm.conf
+%{_modulesloaddir}/passkey-tpm.conf
 
 %changelog
 * Sat Oct 03 2026 Davi Henrique <dangerousplay715@gmail.com> - 0.1.0-1
