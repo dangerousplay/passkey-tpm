@@ -61,7 +61,21 @@ def test_descriptor_opened_before_a_switch_stops_working(alice, bob):
     assert pkt.broker_requests_from(alice.uid) == before, "nothing reached the broker as alice"
 
 
-def test_users_get_separate_gates(alice, bob):
+def nv_indexes() -> list[str]:
     out = pkt.run("passkey-tpm", "tpm", "status").stdout
-    indexes = [l for l in out.splitlines() if l.strip().startswith("0x015")]
-    assert len(indexes) >= 6, f"3 gates per user expected:\n{out}"
+    return [l.strip() for l in out.splitlines() if l.strip().startswith("0x015")]
+
+
+def test_users_get_separate_gates(alice, bob):
+    # Read-only requests provision nothing (HARD-09); bob's gates appear on his first
+    # credential.
+    before = nv_indexes()
+    pkt.activate("bob")
+    assert pkt.busctl_ctap("bob", GET_INFO)[0] == 0x00
+    assert nv_indexes() == before, "getInfo must not define NV indexes"
+    bob.ctap().make_credential(
+        os.urandom(32), RP, {"id": b"bob", "name": "bob"}, [{"type": "public-key", "alg": -7}]
+    )
+    after = nv_indexes()
+    assert len(after) >= 6, f"3 gates per user expected: {after}"
+    assert len(after) == len(before) + 3 or len(before) >= 6
