@@ -1,0 +1,1093 @@
+use std::collections::HashMap;
+
+use passkey_tpm_wire::cbor::{self, Value};
+use passkey_tpm_wire::credid::KeyBlobs;
+use proptest::prelude::*;
+
+use super::common::{cmd, get, get_text, int, sha256, status, text, AAGUID};
+use super::{Authenticator, Step, UserInfo, UvOutcome};
+use crate::evidence::UvEvidence;
+use crate::gates::GateKind;
+use crate::pin_protocol::{parse_platform_key, KeyAgreement, Protocol, SharedSecret};
+use crate::tpm_iface::{CredBlobs, CredProtect, ResidentEntry, RpIdHash, TpmError, TpmOps, Uid};
+
+/// In-memory backend. Credential IDs are `uid ‖ rpIdHash ‖ counter ‖ hmac flag` and open
+/// only for that pair; hmac-secret is SHA-256(private ‖ salt).
+#[derive(Debug, Default)]
+struct MockTpm {
+    created: u32,
+    signed: Vec<(Uid, GateKind, [u8; 32])>,
+    pins: HashMap<u32, [u8; 16]>,
+    retries: HashMap<u32, u8>,
+    resident: HashMap<u32, Vec<ResidentEntry>>,
+    resets: Vec<u32>,
+    revoked: Vec<Vec<u8>>,
+}
+
+impl TpmOps for MockTpm {
+    fn create_credential(
+        &mut self,
+        _: Uid,
+        _: &RpIdHash,
+        protect: CredProtect,
+        with_hmac: bool,
+    ) -> Result<CredBlobs, TpmError> {
+        assert_eq!(protect, CredProtect::UvRequired);
+        self.created += 1;
+        let key = KeyBlobs {
+            public: vec![1],
+            private: self.created.to_be_bytes().to_vec(),
+        };
+        let hmac = with_hmac.then(|| passkey_tpm_wire::credid::HmacBlobs {
+            with_uv: key.clone(),
+            without_uv: key.clone(),
+        });
+        Ok(CredBlobs { protect, key, hmac })
+    }
+    fn credential_id(
+        &mut self,
+        uid: Uid,
+        rp: &RpIdHash,
+        blobs: &CredBlobs,
+    ) -> Result<Vec<u8>, TpmError> {
+        let mut id = uid.0.to_be_bytes().to_vec();
+        id.extend_from_slice(&rp.0);
+        id.extend_from_slice(&blobs.key.private);
+        id.push(u8::from(blobs.hmac.is_some()));
+        Ok(id)
+    }
+    fn open_credential_id(
+        &mut self,
+        uid: Uid,
+        rp: &RpIdHash,
+        id: &[u8],
+    ) -> Result<Option<CredBlobs>, TpmError> {
+        if id.len() == 41
+            && id[..4] == uid.0.to_be_bytes()
+            && id[4..36] == rp.0
+            && !self.resets.contains(&uid.0)
+        {
+            let key = KeyBlobs {
+                public: vec![1],
+                private: id[36..40].to_vec(),
+            };
+            let hmac = (id[40] == 1).then(|| passkey_tpm_wire::credid::HmacBlobs {
+                with_uv: key.clone(),
+                without_uv: key.clone(),
+            });
+            Ok(Some(CredBlobs {
+                protect: CredProtect::UvRequired,
+                key,
+                hmac,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+    fn public_key(&mut self, _: &CredBlobs) -> Result<([u8; 32], [u8; 32]), TpmError> {
+        Ok(([0xaa; 32], [0xbb; 32]))
+    }
+    fn sign(
+        &mut self,
+        uid: Uid,
+        _: &CredBlobs,
+        _: &RpIdHash,
+        gate: GateKind,
+        digest: &[u8; 32],
+    ) -> Result<Vec<u8>, TpmError> {
+        self.signed.push((uid, gate, *digest));
+        Ok(vec![0x30, 0x00])
+    }
+    fn hmac(
+        &mut self,
+        _: Uid,
+        blobs: &CredBlobs,
+        _: &RpIdHash,
+        gate: GateKind,
+        salt: &[u8; 32],
+    ) -> Result<[u8; 32], TpmError> {
+        assert!(gate.is_uv(), "UV always set, so CredRandomWithUV");
+        Ok(sha256(&[&blobs.key.private, salt]))
+    }
+    fn change_pin(
+        &mut self,
+        uid: Uid,
+        old: Option<&[u8; 16]>,
+        new: &[u8; 16],
+    ) -> Result<(), TpmError> {
+        if self.pins.get(&uid.0) != old {
+            return Err(TpmError::WrongPin);
+        }
+        self.pins.insert(uid.0, *new);
+        Ok(())
+    }
+    fn verify_pin(&mut self, uid: Uid, pin_hash: &[u8; 16]) -> Result<(), TpmError> {
+        match self.pins.get(&uid.0) {
+            Some(p) if p == pin_hash => Ok(()),
+            Some(_) => Err(TpmError::WrongPin),
+            None => Err(TpmError::Unavailable),
+        }
+    }
+    fn pin_is_set(&mut self, uid: Uid) -> Result<bool, TpmError> {
+        Ok(self.pins.contains_key(&uid.0))
+    }
+    fn pin_retries(&mut self, uid: Uid) -> Result<u8, TpmError> {
+        Ok(*self.retries.get(&uid.0).unwrap_or(&8))
+    }
+    fn set_pin_retries(&mut self, uid: Uid, retries: u8) -> Result<(), TpmError> {
+        self.retries.insert(uid.0, retries);
+        Ok(())
+    }
+    fn resident_entries(&mut self, uid: Uid) -> Result<Vec<ResidentEntry>, TpmError> {
+        Ok(self.resident.get(&uid.0).cloned().unwrap_or_default())
+    }
+    fn store_resident_entries(
+        &mut self,
+        uid: Uid,
+        entries: &[ResidentEntry],
+    ) -> Result<(), TpmError> {
+        self.resident.insert(uid.0, entries.to_vec());
+        Ok(())
+    }
+    fn revoke_credential(&mut self, _: Uid, id: &[u8]) -> Result<(), TpmError> {
+        self.revoked.push(id.to_vec());
+        Ok(())
+    }
+    fn reset_user(&mut self, uid: Uid) -> Result<(), TpmError> {
+        self.resets.push(uid.0);
+        self.pins.remove(&uid.0);
+        self.retries.remove(&uid.0);
+        self.resident.remove(&uid.0);
+        Ok(())
+    }
+    fn health(&mut self) -> Result<(), TpmError> {
+        Ok(())
+    }
+}
+
+const ALICE: Uid = Uid(1000);
+const BOB: Uid = Uid(1001);
+const ENROLLED: UserInfo = UserInfo { uv_enrolled: true };
+const NO_READER: UserInfo = UserInfo { uv_enrolled: false };
+const RP: &str = "example.com";
+const PIN: &[u8] = b"123456";
+
+type A = Authenticator<MockTpm>;
+
+fn auth() -> A {
+    Authenticator::new(MockTpm::default())
+}
+
+fn req(command: u8, params: Vec<(Value, Value)>) -> Vec<u8> {
+    let mut r = vec![command];
+    if !params.is_empty() {
+        r.extend_from_slice(&cbor::encode(&Value::Map(params)));
+    }
+    r
+}
+
+fn descriptor(id: &[u8]) -> Value {
+    Value::Map(vec![
+        (text("type"), text("public-key")),
+        (text("id"), Value::Bytes(id.to_vec())),
+    ])
+}
+
+fn mc_params(extra: Vec<(Value, Value)>) -> Vec<(Value, Value)> {
+    let mut m = vec![
+        (int(1), Value::Bytes(vec![9; 32])),
+        (
+            int(2),
+            Value::Map(vec![
+                (text("id"), text(RP)),
+                (text("name"), text("Example")),
+            ]),
+        ),
+        (
+            int(3),
+            Value::Map(vec![
+                (text("id"), Value::Bytes(vec![7; 16])),
+                (text("name"), text("alice")),
+                (text("displayName"), text("Alice")),
+            ]),
+        ),
+        (
+            int(4),
+            Value::Array(vec![Value::Map(vec![
+                (text("alg"), int(-7)),
+                (text("type"), text("public-key")),
+            ])]),
+        ),
+    ];
+    m.extend(extra);
+    m
+}
+
+fn ga_params(allow: Option<Vec<Value>>, extra: Vec<(Value, Value)>) -> Vec<(Value, Value)> {
+    let mut m = vec![(int(1), text(RP)), (int(2), Value::Bytes(vec![8; 32]))];
+    if let Some(list) = allow {
+        m.push((int(3), Value::Array(list)));
+    }
+    m.extend(extra);
+    m
+}
+
+fn prep(a: &mut A, uid: Uid, request: &[u8]) -> Step {
+    a.prepare(uid, ENROLLED, request, 1_000)
+}
+
+fn need_uv(step: Step) -> Box<super::Pending> {
+    match step {
+        Step::NeedUv(p) => p,
+        Step::Done(r) => panic!("expected NeedUv, got status {:#04x}", r[0]),
+    }
+}
+
+fn done(step: Step) -> Vec<u8> {
+    match step {
+        Step::Done(r) => r,
+        Step::NeedUv(p) => panic!("unexpected NeedUv for {}", p.rp_id()),
+    }
+}
+
+fn touch(a: &mut A, uid: Uid, step: Step) -> Vec<u8> {
+    a.complete(
+        need_uv(step),
+        UvOutcome::Matched(UvEvidence::from_fprintd_match(uid.0)),
+        1_000,
+    )
+}
+
+fn body(resp: &[u8]) -> Value {
+    assert_eq!(resp[0], status::OK, "status {:#04x}", resp[0]);
+    if resp.len() == 1 {
+        return Value::Map(Vec::new());
+    }
+    cbor::decode(&resp[1..]).unwrap()
+}
+
+fn cred_id_from_auth_data(auth: &[u8]) -> Vec<u8> {
+    let len = usize::from(u16::from_be_bytes([auth[53], auth[54]]));
+    auth[55..55 + len].to_vec()
+}
+
+fn register(a: &mut A, extra: Vec<(Value, Value)>) -> Vec<u8> {
+    let step = prep(a, ALICE, &req(cmd::MAKE_CREDENTIAL, mc_params(extra)));
+    let resp = body(&touch(a, ALICE, step));
+    cred_id_from_auth_data(get(&resp, 2).and_then(Value::as_bytes).unwrap())
+}
+
+/// The platform side of PIN/UV auth protocol `protocol` with this authenticator.
+struct Platform {
+    protocol: Protocol,
+    key: KeyAgreement,
+    shared: SharedSecret,
+}
+
+impl Platform {
+    fn new(a: &mut A, uid: Uid, protocol: Protocol) -> Self {
+        let p = Value::Uint(protocol.as_u64());
+        let resp = body(&done(prep(
+            a,
+            uid,
+            &req(cmd::CLIENT_PIN, vec![(int(1), p), (int(2), Value::Uint(2))]),
+        )));
+        let auth_key = parse_platform_key(get(&resp, 1).unwrap()).unwrap();
+        let key = KeyAgreement::generate().unwrap();
+        let shared = key.shared_secret(protocol, &auth_key).unwrap();
+        Self {
+            protocol,
+            key,
+            shared,
+        }
+    }
+
+    fn base(&self, sub: u64) -> Vec<(Value, Value)> {
+        vec![
+            (int(1), Value::Uint(self.protocol.as_u64())),
+            (int(2), Value::Uint(sub)),
+            (int(3), self.key.cose_public()),
+        ]
+    }
+
+    fn padded(pin: &[u8]) -> Vec<u8> {
+        let mut p = pin.to_vec();
+        p.resize(64, 0);
+        p
+    }
+
+    fn pin_hash_enc(&self, pin: &[u8]) -> Vec<u8> {
+        self.shared.encrypt(&sha256(&[pin])[..16]).unwrap()
+    }
+
+    fn set_pin(&self, pin: &[u8]) -> Vec<u8> {
+        let enc = self.shared.encrypt(&Self::padded(pin)).unwrap();
+        let mut m = self.base(3);
+        m.push((int(4), Value::Bytes(self.shared.authenticate(&enc))));
+        m.push((int(5), Value::Bytes(enc)));
+        req(cmd::CLIENT_PIN, m)
+    }
+
+    fn change_pin(&self, old: &[u8], new: &[u8]) -> Vec<u8> {
+        let new_enc = self.shared.encrypt(&Self::padded(new)).unwrap();
+        let hash_enc = self.pin_hash_enc(old);
+        let mut msg = new_enc.clone();
+        msg.extend_from_slice(&hash_enc);
+        let mut m = self.base(4);
+        m.push((int(4), Value::Bytes(self.shared.authenticate(&msg))));
+        m.push((int(5), Value::Bytes(new_enc)));
+        m.push((int(6), Value::Bytes(hash_enc)));
+        req(cmd::CLIENT_PIN, m)
+    }
+
+    fn token_using_pin(&self, pin: &[u8], perms: u8, rp: Option<&str>) -> Vec<u8> {
+        let mut m = self.base(9);
+        m.push((int(6), Value::Bytes(self.pin_hash_enc(pin))));
+        m.push((int(9), Value::Uint(u64::from(perms))));
+        if let Some(rp) = rp {
+            m.push((int(10), text(rp)));
+        }
+        req(cmd::CLIENT_PIN, m)
+    }
+
+    fn token_using_uv(&self, perms: u8, rp: &str) -> Vec<u8> {
+        let mut m = self.base(6);
+        m.push((int(9), Value::Uint(u64::from(perms))));
+        m.push((int(10), text(rp)));
+        req(cmd::CLIENT_PIN, m)
+    }
+
+    fn decrypt_token(&self, resp: &[u8]) -> [u8; 32] {
+        let enc = get(&body(resp), 2)
+            .and_then(Value::as_bytes)
+            .unwrap()
+            .to_vec();
+        self.shared
+            .decrypt(&enc)
+            .unwrap()
+            .as_slice()
+            .try_into()
+            .unwrap()
+    }
+
+    fn auth_param(&self, token: &[u8; 32], message: &[u8]) -> Value {
+        Value::Bytes(crate::pin_protocol::authenticate_with_token(
+            self.protocol,
+            token,
+            message,
+        ))
+    }
+}
+
+fn set_pin(a: &mut A, uid: Uid, protocol: Protocol) {
+    let p = Platform::new(a, uid, protocol);
+    assert_eq!(done(prep(a, uid, &p.set_pin(PIN))), vec![status::OK]);
+}
+
+// ---------------------------------------------------------------- getInfo / basics
+
+#[test]
+fn get_info_advertises_ctap_2_1() {
+    let mut a = auth();
+    let info = body(&done(prep(&mut a, ALICE, &[cmd::GET_INFO])));
+    assert_eq!(
+        get(&info, 1),
+        Some(&Value::Array(vec![text("FIDO_2_0"), text("FIDO_2_1")]))
+    );
+    assert_eq!(
+        get(&info, 2),
+        Some(&Value::Array(vec![
+            text("credProtect"),
+            text("hmac-secret")
+        ]))
+    );
+    let opts = get(&info, 4).unwrap();
+    for (k, v) in [
+        ("rk", true),
+        ("uv", true),
+        ("clientPin", false),
+        ("pinUvAuthToken", true),
+        ("credMgmt", true),
+    ] {
+        assert_eq!(get_text(opts, k), Some(&Value::Bool(v)), "{k}");
+    }
+    assert_eq!(
+        get(&info, 6),
+        Some(&Value::Array(vec![Value::Uint(2), Value::Uint(1)]))
+    );
+    set_pin(&mut a, ALICE, Protocol::Two);
+    let info = body(&done(prep(&mut a, ALICE, &[cmd::GET_INFO])));
+    assert_eq!(
+        get_text(get(&info, 4).unwrap(), "clientPin"),
+        Some(&Value::Bool(true))
+    );
+    let info = body(&done(prep(&mut a, BOB, &[cmd::GET_INFO])));
+    assert_eq!(
+        get_text(get(&info, 4).unwrap(), "clientPin"),
+        Some(&Value::Bool(false)),
+        "per user"
+    );
+}
+
+#[test]
+fn gesture_registration_and_assertion_still_work() {
+    let mut a = auth();
+    let id = register(&mut a, vec![]);
+    let step = prep(
+        &mut a,
+        ALICE,
+        &req(
+            cmd::GET_ASSERTION,
+            ga_params(Some(vec![descriptor(&[0xee; 41]), descriptor(&id)]), vec![]),
+        ),
+    );
+    let resp = body(&touch(&mut a, ALICE, step));
+    assert_eq!(
+        get_text(get(&resp, 1).unwrap(), "id"),
+        Some(&Value::Bytes(id))
+    );
+    let auth_data = get(&resp, 2).and_then(Value::as_bytes).unwrap();
+    assert_eq!(auth_data[32], 0x05);
+    assert!(get(&resp, 4).is_none(), "no user for non-discoverable");
+    assert_eq!(a.tpm_mut().signed.last().unwrap().1, GateKind::Uv);
+}
+
+#[test]
+fn make_credential_layout_and_attestation() {
+    let mut a = auth();
+    let step = prep(&mut a, ALICE, &req(cmd::MAKE_CREDENTIAL, mc_params(vec![])));
+    assert_eq!(
+        need_uv(prep(
+            &mut a,
+            ALICE,
+            &req(cmd::MAKE_CREDENTIAL, mc_params(vec![]))
+        ))
+        .rp_id(),
+        RP
+    );
+    let resp = body(&touch(&mut a, ALICE, step));
+    assert_eq!(get(&resp, 1), Some(&text("packed")));
+    let auth_data = get(&resp, 2).and_then(Value::as_bytes).unwrap();
+    assert_eq!(auth_data[32], 0x45);
+    assert_eq!(&auth_data[37..53], &AAGUID);
+    assert!(get_text(get(&resp, 3).unwrap(), "x5c").is_none());
+}
+
+#[test]
+fn errors_and_outcomes() {
+    let mut a = auth();
+    let opts = |k: &str, v: bool| (int(7), Value::Map(vec![(text(k), Value::Bool(v))]));
+    assert_eq!(
+        done(prep(
+            &mut a,
+            ALICE,
+            &req(cmd::MAKE_CREDENTIAL, mc_params(vec![opts("up", false)]))
+        )),
+        vec![status::INVALID_OPTION]
+    );
+    assert_eq!(
+        done(prep(&mut a, ALICE, &[cmd::MAKE_CREDENTIAL, 0xff])),
+        vec![status::INVALID_CBOR]
+    );
+    assert_eq!(
+        done(prep(&mut a, ALICE, &[0x40])),
+        vec![status::INVALID_COMMAND]
+    );
+    assert_eq!(
+        done(a.prepare(
+            ALICE,
+            NO_READER,
+            &req(cmd::MAKE_CREDENTIAL, mc_params(vec![])),
+            0
+        )),
+        vec![status::NOT_ALLOWED]
+    );
+    for (outcome, code) in [
+        (UvOutcome::NoMatch, status::OPERATION_DENIED),
+        (UvOutcome::Cancelled, status::KEEPALIVE_CANCEL),
+        (UvOutcome::TimedOut, status::USER_ACTION_TIMEOUT),
+        (UvOutcome::Unavailable, status::NOT_ALLOWED),
+        (
+            UvOutcome::Matched(UvEvidence::from_fprintd_match(BOB.0)),
+            status::OPERATION_DENIED,
+        ),
+    ] {
+        let p = need_uv(prep(
+            &mut a,
+            ALICE,
+            &req(cmd::MAKE_CREDENTIAL, mc_params(vec![])),
+        ));
+        assert_eq!(a.complete(p, outcome, 0), vec![code]);
+    }
+    assert!(a.tpm_mut().signed.is_empty());
+}
+
+#[test]
+fn exclude_list_is_honoured() {
+    let mut a = auth();
+    let id = register(&mut a, vec![]);
+    let step = prep(
+        &mut a,
+        ALICE,
+        &req(
+            cmd::MAKE_CREDENTIAL,
+            mc_params(vec![(int(5), Value::Array(vec![descriptor(&id)]))]),
+        ),
+    );
+    assert_eq!(
+        touch(&mut a, ALICE, step),
+        vec![status::CREDENTIAL_EXCLUDED]
+    );
+}
+
+// ---------------------------------------------------------------- clientPIN
+
+#[test]
+fn set_pin_then_token_using_pin_needs_presence_gesture() {
+    for protocol in [Protocol::One, Protocol::Two] {
+        let mut a = auth();
+        set_pin(&mut a, ALICE, protocol);
+        let p = Platform::new(&mut a, ALICE, protocol);
+        assert_eq!(
+            done(prep(&mut a, ALICE, &p.set_pin(b"999999"))),
+            vec![status::NOT_ALLOWED],
+            "setPIN once"
+        );
+        let token = p.decrypt_token(&done(prep(
+            &mut a,
+            ALICE,
+            &p.token_using_pin(PIN, 0x03, Some(RP)),
+        )));
+        let param = p.auth_param(&token, &[9; 32]);
+        let mc = req(
+            cmd::MAKE_CREDENTIAL,
+            mc_params(vec![
+                (int(8), param),
+                (int(9), Value::Uint(protocol.as_u64())),
+            ]),
+        );
+        // PIN gives UV but not presence: a fingerprint touch is still needed.
+        let step = prep(&mut a, ALICE, &mc);
+        let resp = body(&touch(&mut a, ALICE, step));
+        assert_eq!(get(&resp, 2).and_then(Value::as_bytes).unwrap()[32], 0x45);
+    }
+}
+
+#[test]
+fn token_using_uv_skips_the_second_gesture_once() {
+    let mut a = auth();
+    let p = Platform::new(&mut a, ALICE, Protocol::Two);
+    let step = prep(&mut a, ALICE, &p.token_using_uv(0x03, RP));
+    let token = p.decrypt_token(&touch(&mut a, ALICE, step));
+    let mc = |a: &mut A, token: &[u8; 32]| {
+        let param = p.auth_param(token, &[9; 32]);
+        prep(
+            a,
+            ALICE,
+            &req(
+                cmd::MAKE_CREDENTIAL,
+                mc_params(vec![(int(8), param), (int(9), Value::Uint(2))]),
+            ),
+        )
+    };
+    let resp = body(&done(mc(&mut a, &token)));
+    assert_eq!(
+        get(&resp, 1),
+        Some(&text("packed")),
+        "no prompt: the token carried presence"
+    );
+    assert!(
+        matches!(mc(&mut a, &token), Step::NeedUv(_)),
+        "presence is consumed after one use"
+    );
+}
+
+#[test]
+fn wrong_pins_decrement_retries_then_block() {
+    let mut a = auth();
+    set_pin(&mut a, ALICE, Protocol::Two);
+    let mut codes = Vec::new();
+    for _ in 0..3 {
+        let p = Platform::new(&mut a, ALICE, Protocol::Two);
+        codes.push(
+            done(prep(
+                &mut a,
+                ALICE,
+                &p.token_using_pin(b"000000", 0x03, Some(RP)),
+            ))[0],
+        );
+    }
+    assert_eq!(
+        codes,
+        vec![
+            status::PIN_INVALID,
+            status::PIN_INVALID,
+            status::PIN_AUTH_BLOCKED
+        ]
+    );
+    assert_eq!(
+        a.tpm_mut().retries[&ALICE.0],
+        5,
+        "decremented before each check"
+    );
+    let p = Platform::new(&mut a, ALICE, Protocol::Two);
+    assert_eq!(
+        done(prep(&mut a, ALICE, &p.token_using_pin(PIN, 0x03, Some(RP))))[0],
+        status::PIN_AUTH_BLOCKED,
+        "until restart"
+    );
+
+    // A new broker (power cycle) allows the correct PIN, which restores the retries.
+    let mut fresh = Authenticator::new(std::mem::take(a.tpm_mut()));
+    let p = Platform::new(&mut fresh, ALICE, Protocol::Two);
+    assert_eq!(
+        done(prep(
+            &mut fresh,
+            ALICE,
+            &p.token_using_pin(PIN, 0x03, Some(RP))
+        ))[0],
+        status::OK
+    );
+    assert_eq!(fresh.tpm_mut().retries[&ALICE.0], 8);
+
+    // At zero retries the PIN is blocked, and so is built-in UV.
+    fresh.tpm_mut().retries.insert(ALICE.0, 0);
+    let p = Platform::new(&mut fresh, ALICE, Protocol::Two);
+    assert_eq!(
+        done(prep(
+            &mut fresh,
+            ALICE,
+            &p.token_using_pin(PIN, 0x03, Some(RP))
+        ))[0],
+        status::PIN_BLOCKED
+    );
+    assert_eq!(
+        done(prep(&mut fresh, ALICE, &p.token_using_uv(0x03, RP)))[0],
+        status::PIN_BLOCKED
+    );
+}
+
+#[test]
+fn change_pin_invalidates_the_token() {
+    let mut a = auth();
+    set_pin(&mut a, ALICE, Protocol::Two);
+    let p = Platform::new(&mut a, ALICE, Protocol::Two);
+    let token = p.decrypt_token(&done(prep(
+        &mut a,
+        ALICE,
+        &p.token_using_pin(PIN, 0x03, Some(RP)),
+    )));
+    let p = Platform::new(&mut a, ALICE, Protocol::Two);
+    assert_eq!(
+        done(prep(&mut a, ALICE, &p.change_pin(PIN, b"654321"))),
+        vec![status::OK]
+    );
+    let param = p.auth_param(&token, &[9; 32]);
+    let mc = req(
+        cmd::MAKE_CREDENTIAL,
+        mc_params(vec![(int(8), param), (int(9), Value::Uint(2))]),
+    );
+    assert_eq!(
+        done(prep(&mut a, ALICE, &mc)),
+        vec![status::PIN_AUTH_INVALID]
+    );
+    let p = Platform::new(&mut a, ALICE, Protocol::Two);
+    assert_eq!(
+        done(prep(
+            &mut a,
+            ALICE,
+            &p.token_using_pin(b"654321", 0x03, Some(RP))
+        ))[0],
+        status::OK
+    );
+}
+
+#[test]
+fn token_is_bound_to_its_rp_and_permissions_and_user() {
+    let mut a = auth();
+    let p = Platform::new(&mut a, ALICE, Protocol::Two);
+    let step = prep(&mut a, ALICE, &p.token_using_uv(0x02, RP));
+    let token = p.decrypt_token(&touch(&mut a, ALICE, step));
+    let param = p.auth_param(&token, &[9; 32]);
+    let mc = req(
+        cmd::MAKE_CREDENTIAL,
+        mc_params(vec![(int(8), param), (int(9), Value::Uint(2))]),
+    );
+    assert_eq!(
+        done(prep(&mut a, ALICE, &mc)),
+        vec![status::PIN_AUTH_INVALID],
+        "ga-only token can't register"
+    );
+    assert_eq!(
+        done(prep(&mut a, BOB, &mc)),
+        vec![status::PIN_AUTH_INVALID],
+        "other user's token"
+    );
+    let param_ga = p.auth_param(&token, &[8; 32]);
+    let other_rp = req(
+        cmd::GET_ASSERTION,
+        vec![
+            (int(1), text("evil.example")),
+            (int(2), Value::Bytes(vec![8; 32])),
+            (int(6), param_ga),
+            (int(7), Value::Uint(2)),
+        ],
+    );
+    assert_eq!(
+        done(prep(&mut a, ALICE, &other_rp)),
+        vec![status::PIN_AUTH_INVALID],
+        "bound to example.com"
+    );
+}
+
+#[test]
+fn pin_policy_and_zero_length_auth() {
+    let mut a = auth();
+    let p = Platform::new(&mut a, ALICE, Protocol::Two);
+    assert_eq!(
+        done(prep(&mut a, ALICE, &p.set_pin(b"123"))),
+        vec![status::PIN_POLICY_VIOLATION]
+    );
+    let mc = req(
+        cmd::MAKE_CREDENTIAL,
+        mc_params(vec![
+            (int(8), Value::Bytes(vec![])),
+            (int(9), Value::Uint(2)),
+        ]),
+    );
+    let step = prep(&mut a, ALICE, &mc);
+    assert_eq!(touch(&mut a, ALICE, step), vec![status::PIN_NOT_SET]);
+    set_pin(&mut a, ALICE, Protocol::Two);
+    let step = prep(&mut a, ALICE, &mc);
+    assert_eq!(touch(&mut a, ALICE, step), vec![status::PIN_INVALID]);
+    let retries = body(&done(prep(
+        &mut a,
+        ALICE,
+        &req(
+            cmd::CLIENT_PIN,
+            vec![(int(1), Value::Uint(2)), (int(2), Value::Uint(1))],
+        ),
+    )));
+    assert_eq!(get(&retries, 3), Some(&Value::Uint(8)));
+}
+
+// ---------------------------------------------------------------- discoverable + extensions
+
+#[test]
+fn discoverable_credentials_multiple_accounts_and_next_assertion() {
+    let mut a = auth();
+    let rk = (int(7), Value::Map(vec![(text("rk"), Value::Bool(true))]));
+    let first = register(&mut a, vec![rk.clone()]);
+    let mut params = mc_params(vec![rk]);
+    params[2] = (
+        int(3),
+        Value::Map(vec![
+            (text("id"), Value::Bytes(vec![8; 16])),
+            (text("name"), text("bob")),
+        ]),
+    );
+    let step = prep(&mut a, ALICE, &req(cmd::MAKE_CREDENTIAL, params));
+    let resp = body(&touch(&mut a, ALICE, step));
+    let second = cred_id_from_auth_data(get(&resp, 2).and_then(Value::as_bytes).unwrap());
+    assert_eq!(a.tpm_mut().resident[&ALICE.0].len(), 2);
+
+    let step = prep(
+        &mut a,
+        ALICE,
+        &req(cmd::GET_ASSERTION, ga_params(None, vec![])),
+    );
+    let resp = body(&touch(&mut a, ALICE, step));
+    assert_eq!(get(&resp, 5), Some(&Value::Uint(2)), "numberOfCredentials");
+    assert!(get_text(get(&resp, 4).unwrap(), "id").is_some());
+    let mut all = vec![get_text(get(&resp, 1).unwrap(), "id").unwrap().clone()];
+    let next = body(&done(prep(&mut a, ALICE, &[cmd::GET_NEXT_ASSERTION])));
+    all.push(get_text(get(&next, 1).unwrap(), "id").unwrap().clone());
+    assert!(all.contains(&Value::Bytes(first)) && all.contains(&Value::Bytes(second)));
+    assert_eq!(
+        done(prep(&mut a, ALICE, &[cmd::GET_NEXT_ASSERTION])),
+        vec![status::NOT_ALLOWED],
+        "exhausted"
+    );
+
+    let step = prep(
+        &mut a,
+        BOB,
+        &req(cmd::GET_ASSERTION, ga_params(None, vec![])),
+    );
+    assert_eq!(
+        touch(&mut a, BOB, step),
+        vec![status::NO_CREDENTIALS],
+        "another user sees nothing"
+    );
+}
+
+#[test]
+fn same_user_and_rp_replaces_the_discoverable_credential() {
+    let mut a = auth();
+    let rk = (int(7), Value::Map(vec![(text("rk"), Value::Bool(true))]));
+    register(&mut a, vec![rk.clone()]);
+    let second = register(&mut a, vec![rk]);
+    let entries = &a.tpm_mut().resident[&ALICE.0];
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].credential_id, second);
+}
+
+#[test]
+fn hmac_secret_round_trip_and_cred_protect_echo() {
+    let mut a = auth();
+    let ext = Value::Map(vec![
+        (text("hmac-secret"), Value::Bool(true)),
+        (text("credProtect"), Value::Uint(1)),
+    ]);
+    let step = prep(
+        &mut a,
+        ALICE,
+        &req(cmd::MAKE_CREDENTIAL, mc_params(vec![(int(6), ext)])),
+    );
+    let resp = body(&touch(&mut a, ALICE, step));
+    let auth_data = get(&resp, 2).and_then(Value::as_bytes).unwrap().to_vec();
+    assert_eq!(auth_data[32] & 0x80, 0x80, "ED flag");
+    let id = cred_id_from_auth_data(&auth_data);
+    let cose_len = cbor::encode(&super::common::cose_es256([0xaa; 32], [0xbb; 32])).len();
+    let ext_out = cbor::decode(&auth_data[55 + id.len() + cose_len..]).unwrap();
+    assert_eq!(get_text(&ext_out, "hmac-secret"), Some(&Value::Bool(true)));
+    assert_eq!(
+        get_text(&ext_out, "credProtect"),
+        Some(&Value::Uint(3)),
+        "applied level echoed"
+    );
+
+    for protocol in [Protocol::One, Protocol::Two] {
+        let p = Platform::new(&mut a, ALICE, protocol);
+        let salts = [[1u8; 32], [2u8; 32]].concat();
+        let salt_enc = p.shared.encrypt(&salts).unwrap();
+        let hmac_in = Value::Map(vec![
+            (int(1), p.key.cose_public()),
+            (int(2), Value::Bytes(salt_enc.clone())),
+            (int(3), Value::Bytes(p.shared.authenticate(&salt_enc))),
+            (int(4), Value::Uint(protocol.as_u64())),
+        ]);
+        let ga = req(
+            cmd::GET_ASSERTION,
+            ga_params(
+                Some(vec![descriptor(&id)]),
+                vec![(int(4), Value::Map(vec![(text("hmac-secret"), hmac_in)]))],
+            ),
+        );
+        let step = prep(&mut a, ALICE, &ga);
+        let resp = body(&touch(&mut a, ALICE, step));
+        let auth_data = get(&resp, 2).and_then(Value::as_bytes).unwrap();
+        let out = cbor::decode(&auth_data[37..]).unwrap();
+        let enc = get_text(&out, "hmac-secret")
+            .and_then(Value::as_bytes)
+            .unwrap();
+        let plain = p.shared.decrypt(enc).unwrap();
+        let private = &id[36..40];
+        assert_eq!(&plain[..32], &sha256(&[private, &[1u8; 32]]));
+        assert_eq!(&plain[32..], &sha256(&[private, &[2u8; 32]]));
+    }
+
+    let p = Platform::new(&mut a, ALICE, Protocol::Two);
+    let salt_enc = p.shared.encrypt(&[1u8; 32]).unwrap();
+    let bad = Value::Map(vec![
+        (int(1), p.key.cose_public()),
+        (int(2), Value::Bytes(salt_enc)),
+        (int(3), Value::Bytes(vec![0; 32])),
+        (int(4), Value::Uint(2)),
+    ]);
+    let ga = req(
+        cmd::GET_ASSERTION,
+        ga_params(
+            Some(vec![descriptor(&id)]),
+            vec![(int(4), Value::Map(vec![(text("hmac-secret"), bad)]))],
+        ),
+    );
+    assert_eq!(
+        done(prep(&mut a, ALICE, &ga)),
+        vec![status::PIN_AUTH_INVALID],
+        "bad saltAuth"
+    );
+}
+
+// ---------------------------------------------------------------- credMgmt, reset, selection
+
+fn cm_token(a: &mut A, p: &Platform) -> [u8; 32] {
+    p.decrypt_token(&done(prep(a, ALICE, &p.token_using_pin(PIN, 0x04, None))))
+}
+
+fn cm(p: &Platform, token: &[u8; 32], sub: u8, params: Option<Value>) -> Vec<u8> {
+    let mut msg = vec![sub];
+    if let Some(sp) = &params {
+        msg.extend_from_slice(&cbor::encode(sp));
+    }
+    let mut m = vec![(int(1), Value::Uint(u64::from(sub)))];
+    if let Some(sp) = params {
+        m.push((int(2), sp));
+    }
+    m.push((int(3), Value::Uint(p.protocol.as_u64())));
+    m.push((int(4), p.auth_param(token, &msg)));
+    req(cmd::CREDENTIAL_MANAGEMENT, m)
+}
+
+#[test]
+fn credential_management_enumerate_update_delete() {
+    let mut a = auth();
+    let rk = (int(7), Value::Map(vec![(text("rk"), Value::Bool(true))]));
+    let id = register(&mut a, vec![rk]);
+    set_pin(&mut a, ALICE, Protocol::Two);
+    let p = Platform::new(&mut a, ALICE, Protocol::Two);
+    let token = cm_token(&mut a, &p);
+
+    let meta = body(&done(prep(&mut a, ALICE, &cm(&p, &token, 1, None))));
+    assert_eq!(get(&meta, 1), Some(&Value::Uint(1)));
+    let rps = body(&done(prep(&mut a, ALICE, &cm(&p, &token, 2, None))));
+    assert_eq!(get_text(get(&rps, 3).unwrap(), "id"), Some(&text(RP)));
+    assert_eq!(get(&rps, 5), Some(&Value::Uint(1)));
+    let scope = Value::Map(vec![(
+        int(1),
+        Value::Bytes(sha256(&[RP.as_bytes()]).to_vec()),
+    )]);
+    let creds = body(&done(prep(&mut a, ALICE, &cm(&p, &token, 4, Some(scope)))));
+    assert_eq!(
+        get_text(get(&creds, 7).unwrap(), "id"),
+        Some(&Value::Bytes(id.clone()))
+    );
+    assert_eq!(get(&creds, 0x0A), Some(&Value::Uint(3)));
+
+    let update = Value::Map(vec![
+        (int(2), descriptor(&id)),
+        (
+            int(3),
+            Value::Map(vec![
+                (text("id"), Value::Bytes(vec![7; 16])),
+                (text("name"), text("alice2")),
+            ]),
+        ),
+    ]);
+    assert_eq!(
+        done(prep(&mut a, ALICE, &cm(&p, &token, 7, Some(update)))),
+        vec![status::OK]
+    );
+    assert_eq!(a.tpm_mut().resident[&ALICE.0][0].user_name, "alice2");
+
+    let delete = Value::Map(vec![(int(2), descriptor(&id))]);
+    assert_eq!(
+        done(prep(
+            &mut a,
+            ALICE,
+            &cm(&p, &token, 6, Some(delete.clone()))
+        )),
+        vec![status::OK]
+    );
+    assert!(a.tpm_mut().resident[&ALICE.0].is_empty());
+    assert_eq!(
+        done(prep(&mut a, ALICE, &cm(&p, &token, 6, Some(delete)))),
+        vec![status::NO_CREDENTIALS]
+    );
+
+    let p = Platform::new(&mut a, ALICE, Protocol::Two);
+    let ga_token = p.decrypt_token(&done(prep(
+        &mut a,
+        ALICE,
+        &p.token_using_pin(PIN, 0x02, Some(RP)),
+    )));
+    assert_eq!(
+        done(prep(&mut a, ALICE, &cm(&p, &ga_token, 1, None))),
+        vec![status::PIN_AUTH_INVALID],
+        "no cm permission"
+    );
+}
+
+#[test]
+fn rp_bound_cm_token_manages_only_that_rps_credentials() {
+    let mut a = auth();
+    let rk = (int(7), Value::Map(vec![(text("rk"), Value::Bool(true))]));
+    let id = register(&mut a, vec![rk.clone()]);
+    let mut other = mc_params(vec![rk]);
+    other[1] = (
+        int(2),
+        Value::Map(vec![(text("id"), text("other.example"))]),
+    );
+    let step = prep(&mut a, ALICE, &req(cmd::MAKE_CREDENTIAL, other));
+    let other_id = cred_id_from_auth_data(
+        get(&body(&touch(&mut a, ALICE, step)), 2)
+            .and_then(Value::as_bytes)
+            .unwrap(),
+    );
+    set_pin(&mut a, ALICE, Protocol::Two);
+    let p = Platform::new(&mut a, ALICE, Protocol::Two);
+    let token = p.decrypt_token(&done(prep(
+        &mut a,
+        ALICE,
+        &p.token_using_pin(PIN, 0x04, Some(RP)),
+    )));
+    let del = |id: &[u8]| Value::Map(vec![(int(2), descriptor(id))]);
+    assert_eq!(
+        done(prep(
+            &mut a,
+            ALICE,
+            &cm(&p, &token, 6, Some(del(&other_id)))
+        )),
+        vec![status::PIN_AUTH_INVALID],
+        "other RP"
+    );
+    assert_eq!(
+        done(prep(&mut a, ALICE, &cm(&p, &token, 1, None))),
+        vec![status::PIN_AUTH_INVALID],
+        "metadata needs an unbound token"
+    );
+    assert_eq!(
+        done(prep(&mut a, ALICE, &cm(&p, &token, 6, Some(del(&id))))),
+        vec![status::OK],
+        "own RP"
+    );
+}
+
+#[test]
+fn reset_wipes_only_the_callers_state_and_selection_needs_a_touch() {
+    let mut a = auth();
+    let id = register(&mut a, vec![]);
+    set_pin(&mut a, ALICE, Protocol::Two);
+    set_pin(&mut a, BOB, Protocol::Two);
+    let step = prep(&mut a, ALICE, &[cmd::RESET]);
+    assert_eq!(touch(&mut a, ALICE, step), vec![status::OK]);
+    assert_eq!(a.tpm_mut().resets, vec![ALICE.0]);
+    assert!(!a.tpm_mut().pins.contains_key(&ALICE.0));
+    assert!(a.tpm_mut().pins.contains_key(&BOB.0), "Bob untouched");
+    let step = prep(
+        &mut a,
+        ALICE,
+        &req(
+            cmd::GET_ASSERTION,
+            ga_params(Some(vec![descriptor(&id)]), vec![]),
+        ),
+    );
+    assert_eq!(
+        touch(&mut a, ALICE, step),
+        vec![status::NO_CREDENTIALS],
+        "old credential IDs are dead"
+    );
+    let step = prep(&mut a, ALICE, &[cmd::SELECTION]);
+    assert_eq!(touch(&mut a, ALICE, step), vec![status::OK]);
+}
+
+proptest! {
+    #[test]
+    fn prepare_never_panics(bytes in prop::collection::vec(any::<u8>(), 0..600)) {
+        let mut a = auth();
+        if let Step::NeedUv(p) = a.prepare(ALICE, ENROLLED, &bytes, 0) {
+            let _ = a.complete(p, UvOutcome::Cancelled, 0);
+        }
+    }
+
+    #[test]
+    fn client_pin_and_cred_mgmt_never_panic(sub in 0u8..12, junk in prop::collection::vec(any::<u8>(), 0..200)) {
+        let mut a = auth();
+        let mut r = vec![cmd::CLIENT_PIN];
+        r.extend(cbor::encode(&Value::Map(vec![(int(1), Value::Uint(2)), (int(2), Value::Uint(u64::from(sub))), (int(5), Value::Bytes(junk.clone()))])));
+        let _ = a.prepare(ALICE, ENROLLED, &r, 0);
+        let mut r = vec![cmd::CREDENTIAL_MANAGEMENT];
+        r.extend(cbor::encode(&Value::Map(vec![(int(1), Value::Uint(u64::from(sub))), (int(4), Value::Bytes(junk))])));
+        let _ = a.prepare(ALICE, ENROLLED, &r, 0);
+    }
+}

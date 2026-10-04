@@ -1,0 +1,63 @@
+[package]
+name = "passkey-tpm-core"
+description = "Formally verified CTAP 2.1 authenticator core (Verus) for passkey-tpm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+passkey-tpm-wire = { path = "../passkey-tpm-wire" }
+sha2 = "0.10"
+p256 = { version = "0.13", default-features = false, features = ["ecdh", "arithmetic", "std"] }
+aes = "0.8"
+cbc = { version = "0.1", features = ["std"] }
+hkdf = "0.12"
+hmac = "0.12"
+getrandom = "0.3"
+zeroize = "1.8"
+# Exact pin: must match the Verus release in tools/verus.toml.
+vstd = "=0.0.0-2026-09-20-0158"
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }
+
+[package.metadata.verus]
+verify = true
+
+# Panic-freedom crate: workspace lints repeated here (Cargo cannot extend
+# `lints.workspace`) plus panic, indexing and arithmetic lints.
+[lints.rust]
+unsafe_code = "forbid"
+renamed_and_removed_lints = "deny"
+missing_debug_implementations = "warn"
+unused_must_use = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_only)', 'cfg(kani)', 'cfg(fuzzing)'] }
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+# Pedantic subset: catches lossy casts and silent truncation, which matter in wire formats.
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+cast_possible_wrap = "deny"
+cast_lossless = "warn"
+checked_conversions = "deny"
+unchecked_time_subtraction = "deny"
+manual_assert = "warn"
+missing_errors_doc = "warn"
+semicolon_if_nothing_returned = "warn"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+print_stdout = "warn"
+mem_forget = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+# arithmetic_side_effects omitted: Verus proves every arithmetic operation in verus! blocks
+# is in range, and all exec code in this crate lives in verus! blocks.
+string_slice = "deny"
