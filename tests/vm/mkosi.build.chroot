@@ -1,0 +1,28 @@
+#!/bin/bash
+# Builds passkey-tpm inside Ubuntu 24.04 (so binaries match noble's glibc) and installs it
+# through `cargo xtask dist`, exactly as the distribution recipes do.
+set -euxo pipefail
+
+export RUSTUP_HOME="$BUILDDIR/rustup" CARGO_HOME="$BUILDDIR/cargo" CARGO_TARGET_DIR="$BUILDDIR/target"
+toolchain=$(sed -n 's/^channel = "\(.*\)"/\1/p' "$SRCDIR/passkey-tpm/rust-toolchain.toml")
+if [[ ! -x "$CARGO_HOME/bin/cargo" ]]; then
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path --profile minimal --default-toolchain "$toolchain"
+fi
+export PATH="$CARGO_HOME/bin:$PATH"
+
+cd "$SRCDIR/passkey-tpm"
+cargo build --release --locked -p passkey-tpm-uvd -p passkey-tpm-agent -p passkey-tpm-cli
+cargo build --release --locked -p passkey-tpm-uv --example mock-fprintd --features mock
+CARGO_TARGET_DIR="$BUILDDIR/target" cargo run --release --locked -q -p xtask -- dist --no-build --destdir "$DESTDIR"
+
+# Test payload: the pytest project (dependencies locked with uv; the venv is created by
+# mkosi.postinst.chroot at its final path) and the mock fprintd as a fallback.
+install -d "$DESTDIR/usr/lib/passkey-tpm-tests/e2e/tests"
+install -m 0644 tests/vm/e2e/pyproject.toml tests/vm/e2e/uv.lock tests/vm/e2e/pkt.py tests/vm/e2e/conftest.py \
+    "$DESTDIR/usr/lib/passkey-tpm-tests/e2e/"
+install -m 0644 tests/vm/e2e/tests/*.py "$DESTDIR/usr/lib/passkey-tpm-tests/e2e/tests/"
+install -m 0755 "$CARGO_TARGET_DIR/release/examples/mock-fprintd" "$DESTDIR/usr/lib/passkey-tpm-tests/"
+uv_version=$(sed -n 's/^version = "\(.*\)"/\1/p' tools/uv.toml)
+python3 -m venv "$BUILDDIR/uv-venv"
+"$BUILDDIR/uv-venv/bin/pip" install -q "uv==$uv_version"
+install -D -m 0755 "$BUILDDIR/uv-venv/bin/uv" "$DESTDIR/usr/lib/passkey-tpm-tests/bin/uv"

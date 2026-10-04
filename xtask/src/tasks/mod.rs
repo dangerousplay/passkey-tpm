@@ -9,8 +9,10 @@ mod dist;
 mod fmt;
 mod fuzz;
 mod kani;
+mod portability;
 mod test;
 mod verus;
+mod vm;
 
 use crate::runner::Result;
 
@@ -70,6 +72,16 @@ pub const TASKS: &[Task] = &[
         name: "dist",
         about: "release build + FHS tree: [--destdir DIR] [--prefix /usr] [--libexecdir DIR] [--no-build]",
         run: dist::run,
+    },
+    Task {
+        name: "portability",
+        about: "check the portable crates (core, wire) build for FreeBSD",
+        run: portability::run,
+    },
+    Task {
+        name: "vm",
+        about: "E2E scenarios in an mkosi VM (swtpm + virtual fingerprint): [--no-build] [--timeout S]",
+        run: vm::run,
     },
     Task {
         name: "build",

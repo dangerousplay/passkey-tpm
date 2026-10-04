@@ -1,0 +1,14 @@
+[Unit]
+Description=passkey-tpm end-to-end scenarios
+After=multi-user.target dbus.service systemd-sysusers.service
+Wants=dbus.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/passkey-tpm-tests/run
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=20min
+
+[Install]
+WantedBy=multi-user.target

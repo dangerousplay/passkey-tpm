@@ -1,0 +1,2 @@
+# Pinned uv for the VM test dependencies (tests/vm/e2e/uv.lock).
+version = "0.12.23"

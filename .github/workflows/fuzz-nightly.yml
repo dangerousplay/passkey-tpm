@@ -35,3 +35,28 @@ jobs:
         with:
           name: fuzz-artifacts
           path: fuzz/artifacts
+
+  vm-e2e:
+    # End-to-end scenarios in an Ubuntu 24.04 mkosi VM with swtpm and the libfprint
+    # virtual fingerprint device (AD-014).
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Enable KVM for the runner user
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+          sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm
+      - name: Host tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-x86 swtpm ovmf python3-venv
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            target/vm/cache
+            target/vm/build
+            target/tools
+          key: vm-${{ runner.os }}-${{ hashFiles('tests/vm/**', 'tools/*.toml', 'Cargo.lock') }}
+          restore-keys: vm-${{ runner.os }}-
+      - run: cargo xtask vm

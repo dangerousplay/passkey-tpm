@@ -1,0 +1,19 @@
+#!/bin/bash
+# Boot-time runner (AD-014): the pytest suite with JUnit + HTML reports. /report is the
+# host's target/vm/report (mkosi RuntimeTrees); the console marker is a fallback.
+set -uo pipefail
+E2E=/usr/lib/passkey-tpm-tests/e2e
+report=/report
+mountpoint -q "$report" 2>/dev/null || { report=/var/tmp/passkey-tpm-report; mkdir -p "$report"; }
+
+cd "$E2E"
+E2E_REPORT_DIR="$report" "$E2E/.venv/bin/pytest" -p no:cacheprovider \
+    --junitxml="$report/junit.xml" \
+    --html="$report/report.html" --self-contained-html \
+    --color=yes 2>&1
+rc=$?
+journalctl -b --no-pager > "$report/journal.txt" 2>/dev/null
+if [[ $rc -eq 0 ]]; then verdict=PASS; else verdict=FAIL; fi
+echo "PASSKEY_TPM_E2E_RESULT=$verdict pytest-exit=$rc"
+sync
+systemctl poweroff --no-block

@@ -1,0 +1,2 @@
+# Pinned mkosi (installed into target/tools by `cargo xtask vm`).
+version = "v27.1"

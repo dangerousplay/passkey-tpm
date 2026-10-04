@@ -1,0 +1,22 @@
+[project]
+name = "passkey-tpm-e2e"
+version = "0.1.0"
+description = "passkey-tpm end-to-end scenarios run inside the mkosi test VM (AD-014)"
+requires-python = ">=3.12"
+dependencies = [
+    "fido2==2.2.1",
+    "pytest==9.1.1",
+    "pytest-testinfra==10.2.2",
+    "pytest-html==4.2.0",
+    "pytest-timeout==2.4.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --timeout=300"
+markers = [
+    "destructive: changes TPM state in ways only acceptable on a throwaway TPM",
+]

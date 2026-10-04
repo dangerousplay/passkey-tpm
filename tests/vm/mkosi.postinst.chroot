@@ -1,0 +1,10 @@
+#!/bin/bash
+set -euxo pipefail
+# Test users. bob exists to check that one user can't use another's credentials.
+id alice >/dev/null 2>&1 || useradd --create-home --shell /bin/bash alice
+id bob >/dev/null 2>&1 || useradd --create-home --shell /bin/bash bob
+systemctl enable passkey-tpm-e2e.service
+# Test dependencies at their final path, exactly as locked.
+cd /usr/lib/passkey-tpm-tests/e2e
+UV_PYTHON=/usr/bin/python3 UV_PROJECT_ENVIRONMENT=/usr/lib/passkey-tpm-tests/e2e/.venv \
+    /usr/lib/passkey-tpm-tests/bin/uv sync --frozen --no-install-project --python /usr/bin/python3

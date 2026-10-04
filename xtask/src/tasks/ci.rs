@@ -9,6 +9,7 @@ pub const STEPS: &[(&str, &[&str])] = &[
     ("deny", &[]),
     ("test", &[]),
     ("verus", &[]),
+    ("portability", &[]),
 ];
 
 /// Slow checks added by `cargo xtask ci --full` (and run nightly in CI).
@@ -51,7 +52,10 @@ mod tests {
     #[test]
     fn pipeline_order_is_cheap_to_expensive() {
         let names: Vec<&str> = STEPS.iter().map(|(n, _)| *n).collect();
-        assert_eq!(names, ["fmt", "clippy", "deny", "test", "verus"]);
+        assert_eq!(
+            names,
+            ["fmt", "clippy", "deny", "test", "verus", "portability"]
+        );
         let slow: Vec<&str> = SLOW_STEPS.iter().map(|(n, _)| *n).collect();
         assert_eq!(slow, ["kani", "fuzz"]);
     }
