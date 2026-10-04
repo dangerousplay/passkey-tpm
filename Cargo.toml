@@ -1,0 +1,43 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "xtask"]
+exclude = ["fuzz"]
+default-members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.98.1"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/dangerousplay/passkey-tpm"
+authors = ["Davi Henrique"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+renamed_and_removed_lints = "deny"
+missing_debug_implementations = "warn"
+unused_must_use = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_only)', 'cfg(kani)', 'cfg(fuzzing)'] }
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+# Pedantic subset: catches lossy casts and silent truncation, which matter in wire formats.
+cast_possible_truncation = "deny"
+cast_sign_loss = "deny"
+cast_possible_wrap = "deny"
+cast_lossless = "warn"
+checked_conversions = "deny"
+unchecked_time_subtraction = "deny"
+manual_assert = "warn"
+missing_errors_doc = "warn"
+semicolon_if_nothing_returned = "warn"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+print_stdout = "warn"
+mem_forget = "deny"

@@ -1,0 +1,2 @@
+# Pinned cargo-deny (installed into target/tools by `cargo xtask deny`).
+version = "0.20.2"

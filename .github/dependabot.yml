@@ -1,0 +1,16 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
+        patterns: ["*"]
+    ignore:
+      # Pinned to the Verus release in tools/verus.toml; bumped together by hand.
+      - dependency-name: vstd
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

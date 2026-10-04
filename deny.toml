@@ -1,0 +1,45 @@
+# cargo-deny policy (https://embarkstudios.github.io/cargo-deny/). Run with `cargo xtask deny`.
+
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+# Every ignored advisory needs a reason and a tracking issue.
+ignore = []
+
+[licenses]
+version = 2
+confidence-threshold = 0.93
+unused-allowed-license = "allow"
+# Permissive licenses compatible with MIT OR Apache-2.0 distribution.
+# LGPL code (credentialsd, libwebauthn) may only be used across a process boundary, never linked.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CC0-1.0",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = [
+    # Unmaintained (RUSTSEC-2021-0127); use ciborium.
+    { crate = "serde_cbor", reason = "unmaintained, RUSTSEC-2021-0127" },
+    # Copy-on-GC and non-zeroizing secret types defeat key hygiene.
+    { crate = "openssl", reason = "use RustCrypto or the TPM; avoid a second crypto stack" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

@@ -1,0 +1,3 @@
+# cargo-fuzz needs a nightly toolchain for -Zsanitizer; pin both.
+version = "0.13.2"
+toolchain = "nightly-2026-08-18"

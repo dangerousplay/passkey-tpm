@@ -1,0 +1,5 @@
+# Pinned to the toolchain required by the pinned Verus release (tools/verus.toml).
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

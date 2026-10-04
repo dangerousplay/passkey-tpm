@@ -1,0 +1,11 @@
+passkey-tpm
+Copyright (c) 2026 Davi Henrique and passkey-tpm contributors
+
+passkey-tpm is a Rust rewrite inspired by, and the successor of,
+tpm-fido2-thinkpad-linux, which itself derives from tpm-fido:
+
+  tpm-fido — https://github.com/psanford/tpm-fido
+  Copyright (c) 2021 Peter Sanford
+  Licensed under the MIT License.
+
+No source code from GPL-licensed projects is included.

@@ -1,0 +1,51 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  # Every job runs exactly one `cargo xtask <step>`; `cargo xtask ci` runs the same steps locally.
+  gate:
+    name: ${{ matrix.step }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - step: fmt
+            args: --check
+          - step: clippy
+          - step: deny
+          - step: test
+          - step: verus
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.kani
+            target
+            fuzz/target
+          key: ${{ matrix.step }}-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'tools/*.toml', '**/Cargo.lock') }}
+          restore-keys: ${{ matrix.step }}-${{ runner.os }}-
+      - name: Install TPM libraries and swtpm
+        if: matrix.step == 'clippy' || matrix.step == 'test'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libtss2-dev pkg-config swtpm
+      - run: cargo xtask ${{ matrix.step }} ${{ matrix.args }}

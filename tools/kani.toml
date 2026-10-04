@@ -1,0 +1,2 @@
+# Pinned Kani release (installed with `cargo install --locked` into target/tools by `cargo xtask kani`).
+version = "0.68.0"
