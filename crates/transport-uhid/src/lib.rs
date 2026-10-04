@@ -640,6 +640,29 @@ impl UhidWriter {
     pub fn write_input(&self, data: &[u8]) -> io::Result<()> {
         write_event(&self.file, &encode_input2(data)?)
     }
+
+    /// Removes the HID device (`UHID_DESTROY`) but keeps the `/dev/uhid` handle open, so
+    /// [`UhidWriter::recreate`] can bring it back. Open hidraw descriptors of the removed
+    /// device stop working; the [`UhidDevice`] reader keeps blocking until the next device
+    /// on the same handle produces events.
+    ///
+    /// # Errors
+    ///
+    /// Returns the write error (`EINVAL` if no device exists on this handle).
+    pub fn remove_device(&self) -> io::Result<()> {
+        write_event(&self.file, &encode_destroy())
+    }
+
+    /// Creates a new device (`UHID_CREATE2`) on the same handle after
+    /// [`UhidWriter::remove_device`]. The kernel acknowledges with [`UhidEvent::Start`] on
+    /// the reader.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`UhidDevice::create`]; `EALREADY` if a device still exists on this handle.
+    pub fn recreate(&self, params: &DeviceParams) -> io::Result<()> {
+        write_event(&self.file, &encode_create2(params)?)
+    }
 }
 
 #[cfg(test)]

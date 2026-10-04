@@ -16,6 +16,8 @@ notify-rust = { version = "4.18", default-features = false, features = ["z"] }
 passkey-tpm-core = { path = "../core" }
 passkey-tpm-transport-uhid = { path = "../transport-uhid" }
 passkey-tpm-wire = { path = "../wire" }
+passkey-tpm-uv = { path = "../uv" }
+futures-util = { version = "0.3", default-features = false }
 getrandom = "0.4"
 
 [lints]

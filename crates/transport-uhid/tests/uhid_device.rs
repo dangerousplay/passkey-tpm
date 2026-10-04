@@ -79,3 +79,64 @@ fn create_start_hidraw_destroy() {
         "hidraw node still present after destroy"
     );
 }
+
+#[test]
+#[ignore = "needs write access to /dev/uhid"]
+fn remove_and_recreate_on_the_same_handle() {
+    let mut params = fido_device_params();
+    params.name = format!("passkey-tpm-test-re-{}", std::process::id());
+    let name = params.name.clone();
+
+    let mut device = UhidDevice::create(&params).expect("create uhid device");
+    let writer = device.try_clone_writer().expect("clone writer");
+    let (tx, rx) = mpsc::channel();
+    let reader = thread::spawn(move || loop {
+        match device.read_event() {
+            Ok(event) => {
+                if tx.send(event).is_err() {
+                    return;
+                }
+            }
+            Err(_) => return,
+        }
+    });
+    let next = |want: UhidEvent| loop {
+        let event = rx.recv_timeout(Duration::from_secs(3)).expect("uhid event");
+        if event == want {
+            break;
+        }
+    };
+
+    next(UhidEvent::Start);
+    let first = wait_until(Duration::from_secs(3), || find_hidraw(&name).is_some())
+        .then(|| find_hidraw(&name))
+        .flatten()
+        .expect("hidraw node");
+    let dev_node = PathBuf::from("/dev").join(first.file_name().expect("node name"));
+    let stale = fs::OpenOptions::new().write(true).open(&dev_node).ok();
+
+    writer.remove_device().expect("remove");
+    assert!(
+        wait_until(Duration::from_secs(3), || find_hidraw(&name).is_none()),
+        "hidraw node still present after remove"
+    );
+    if let Some(mut stale) = stale {
+        use std::io::Write;
+        assert!(
+            stale.write_all(&[0u8; 65]).is_err(),
+            "a descriptor opened before removal must stop working"
+        );
+    }
+
+    writer.recreate(&params).expect("recreate");
+    next(UhidEvent::Start);
+    assert!(
+        wait_until(Duration::from_secs(3), || find_hidraw(&name).is_some()),
+        "no hidraw node after recreate"
+    );
+    writer.remove_device().expect("final remove");
+    drop(writer);
+    drop(rx);
+    // The reader blocks until the handle closes; it is detached with the test process.
+    drop(reader);
+}

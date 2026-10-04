@@ -227,6 +227,20 @@ impl<R: FnMut() -> u32> Hid<R> {
     pub fn is_busy(&self) -> bool {
         self.in_flight.is_some()
     }
+
+    /// The device is going away (the user's session went to the background): forget every
+    /// channel and partial message, and cancel the in-flight request so no prompt or late
+    /// reply survives the switch.
+    pub fn reset(&mut self) -> Vec<Effect> {
+        let busy = self.in_flight.take().is_some();
+        self.assembler = Assembler::new();
+        self.channels.clear();
+        if busy {
+            vec![Effect::Cancel]
+        } else {
+            Vec::new()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -325,6 +339,29 @@ mod tests {
         );
         assert!(!h.is_busy());
         assert!(h.on_tick(300).is_empty());
+    }
+
+    #[test]
+    fn reset_cancels_the_request_and_forgets_channels() {
+        let mut h = hid();
+        let cid = open_channel(&mut h);
+        let mut req = vec![0x02];
+        req.extend(cbor::encode(&Value::Map(vec![
+            (Value::Uint(1), Value::Text("example.com".into())),
+            (Value::Uint(2), Value::Bytes(vec![0; 32])),
+        ])));
+        h.on_output(&init_packet(cid, CMD_CBOR, &req), 0);
+        assert!(h.is_busy());
+        assert_eq!(h.reset(), vec![Effect::Cancel]);
+        assert!(!h.is_busy());
+        // A late broker reply goes nowhere, and the old channel is gone.
+        assert!(h.on_broker_reply(&[0x00]).is_empty());
+        assert!(h.on_tick(100).is_empty());
+        assert_eq!(
+            h.on_output(&init_packet(cid, CMD_PING, b"x"), 200),
+            vec![error(cid, ERR_INVALID_CHANNEL)]
+        );
+        assert!(h.reset().is_empty(), "idle reset sends no cancel");
     }
 
     #[test]
