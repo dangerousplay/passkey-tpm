@@ -230,15 +230,15 @@ impl Broker {
         let uv_enrolled = match &username {
             Some(name) => match fprintd::has_enrolled(&self.fprintd, name).await {
                 Ok(enrolled) => enrolled,
-                // fprintd can't be started or reached: UV is unavailable, which is not the
-                // same as "no fingerprints". Let a UV request reach `fprintd::verify`, which
-                // retries and ends in `UvOutcome::Unavailable` if fprintd is still down.
+                // fprintd can't be started or reached (no reader, not installed): logged so
+                // it isn't mistaken for "no fingerprints", but advertised as no built-in UV
+                // so clients fall back to the PIN instead of a UV request that must fail.
                 Err(e) => {
                     #[allow(clippy::print_stderr)]
                     {
                         eprintln!("fprintd unavailable for uid={uid}: {e}");
                     }
-                    true
+                    false
                 }
             },
             None => false,
