@@ -1,0 +1,34 @@
+[package]
+name = "passkey-tpm-uv"
+description = "User verification providers (fprintd, presence) for passkey-tpm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[features]
+mock = []
+
+[dependencies]
+zbus = { version = "5.19", default-features = false, features = ["tokio"] }
+tokio = { version = "1.53", features = ["rt", "macros", "time", "sync"] }
+tokio-util = "0.7"
+futures-util = { version = "0.3", default-features = false }
+serde = { version = "1", default-features = false }
+
+[dev-dependencies]
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "process"] }
+
+[[test]]
+name = "fprintd"
+required-features = ["mock"]
+
+[[example]]
+name = "mock-fprintd"
+required-features = ["mock"]
+
+[lints]
+workspace = true
