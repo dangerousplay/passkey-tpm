@@ -10,10 +10,10 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-zeroize = "1.8"
+zeroize = "1.9"
 
 [dev-dependencies]
-proptest = { version = "1", default-features = false, features = ["std"] }
+proptest = { version = "1.11", default-features = false, features = ["std"] }
 
 # Panic-freedom crate: workspace lints repeated here (Cargo cannot extend
 # `lints.workspace`) plus panic, indexing and arithmetic lints.

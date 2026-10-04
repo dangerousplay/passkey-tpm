@@ -4,7 +4,7 @@
 //! of this user's credentials for this RP (needed for excludeList and to avoid asking for a
 //! fingerprint only to fail). It is not the security boundary: the TPM policy is.
 
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use passkey_tpm_core::tpm_iface::{CredBlobs, RpIdHash};
 use passkey_tpm_wire::credid::{self, TAG_LEN};
 use sha2::Sha256;

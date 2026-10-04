@@ -15,12 +15,11 @@
 
 use aes::Aes256;
 use cbc::cipher::block_padding::NoPadding;
-use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use cbc::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit};
 use hkdf::Hkdf;
-use hmac::digest::generic_array::GenericArray;
 use hmac::digest::KeyInit;
 use hmac::{Hmac, Mac};
-use p256::elliptic_curve::sec1::ToEncodedPoint;
+use p256::elliptic_curve::sec1::ToSec1Point;
 use p256::{PublicKey, SecretKey};
 use passkey_tpm_wire::cbor::Value;
 use sha2::{Digest, Sha256};
@@ -129,7 +128,7 @@ impl KeyAgreement {
     /// `getPublicKey()`: COSE_Key `{1: 2, 3: -25, -1: 1, -2: x, -3: y}` (§6.5.6).
     #[must_use]
     pub fn cose_public(&self) -> Value {
-        let point = self.secret.public_key().to_encoded_point(false);
+        let point = self.secret.public_key().to_sec1_point(false);
         let coord = |c: Option<&p256::FieldBytes>| c.map(|b| b.to_vec()).unwrap_or_default();
         Value::Map(vec![
             (Value::int_key(COSE_KTY), Value::int_key(KTY_EC2)),
@@ -250,7 +249,7 @@ fn hmac_32(key: &[u8; 32]) -> HmacSha256 {
     for (dst, src) in block.iter_mut().zip(key.iter()) {
         *dst = *src;
     }
-    <HmacSha256 as KeyInit>::new(GenericArray::from_slice(block.as_slice()))
+    <HmacSha256 as KeyInit>::new((&*block).into())
 }
 
 fn mac(protocol: Protocol, key: &[u8; 32], message: &[u8]) -> Vec<u8> {
@@ -314,7 +313,7 @@ impl SharedSecret {
         }
         let enc = cbc::Encryptor::<Aes256>::new_from_slices(self.aes_key.as_slice(), &iv)
             .map_err(|_| PinError::Crypto)?;
-        let ct = enc.encrypt_padded_vec_mut::<NoPadding>(plaintext);
+        let ct = enc.encrypt_padded_vec::<NoPadding>(plaintext);
         Ok(match self.protocol {
             Protocol::One => ct,
             Protocol::Two => {
@@ -346,7 +345,7 @@ impl SharedSecret {
         }
         let dec = cbc::Decryptor::<Aes256>::new_from_slices(self.aes_key.as_slice(), &iv)
             .map_err(|_| PinError::Crypto)?;
-        dec.decrypt_padded_vec_mut::<NoPadding>(ct)
+        dec.decrypt_padded_vec::<NoPadding>(ct)
             .map(Zeroizing::new)
             .map_err(|_| PinError::InvalidLength)
     }
@@ -485,7 +484,7 @@ mod tests {
         assert_eq!(*z, *b.ecdh_z(&a.secret.public_key()));
         let point = (b.secret.public_key().to_projective() * *a.secret.to_nonzero_scalar())
             .to_affine()
-            .to_encoded_point(false);
+            .to_sec1_point(false);
         assert_eq!(point.x().unwrap().as_slice(), z.as_slice());
         let s = a
             .shared_secret(Protocol::One, &b.secret.public_key())
@@ -497,10 +496,10 @@ mod tests {
 
     /// RFC 5869 §2.2 (extract) and §2.3 (expand, one block) computed by hand with HMAC.
     fn hkdf_by_hand(z: &[u8], info: &[u8]) -> [u8; 32] {
-        let mut ext = <HmacSha256 as Mac>::new_from_slice(&[0u8; 32]).unwrap();
+        let mut ext = <HmacSha256 as KeyInit>::new_from_slice(&[0u8; 32]).unwrap();
         ext.update(z);
         let prk = ext.finalize().into_bytes();
-        let mut exp = <HmacSha256 as Mac>::new_from_slice(&prk).unwrap();
+        let mut exp = <HmacSha256 as KeyInit>::new_from_slice(&prk).unwrap();
         exp.update(info);
         exp.update(&[0x01]);
         exp.finalize().into_bytes().into()
@@ -566,7 +565,7 @@ mod tests {
         let manual =
             cbc::Encryptor::<Aes256>::new_from_slices(secret.aes_key.as_slice(), &[0u8; 16])
                 .unwrap()
-                .encrypt_padded_vec_mut::<NoPadding>(&pt);
+                .encrypt_padded_vec::<NoPadding>(&pt);
         assert_eq!(ct, manual);
     }
 
@@ -660,7 +659,7 @@ mod tests {
     fn padded_hmac_key_matches_new_from_slice() {
         let key: [u8; 32] = core::array::from_fn(|i| u8::try_from(i + 1).unwrap());
         for msg in [&b""[..], b"abc", &[0xcd; 200]] {
-            let mut m = <HmacSha256 as Mac>::new_from_slice(&key).unwrap();
+            let mut m = <HmacSha256 as KeyInit>::new_from_slice(&key).unwrap();
             m.update(msg);
             let expected = m.finalize().into_bytes().to_vec();
             assert_eq!(authenticate_with_token(Protocol::Two, &key, msg), expected);
