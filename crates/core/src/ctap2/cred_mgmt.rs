@@ -72,12 +72,14 @@ impl<T: TpmOps> Authenticator<T> {
             _ => {}
         }
 
-        // pinUvAuthParam = authenticate(token, subCommand ‖ subCommandParams).
+        // pinUvAuthParam = authenticate(token, subCommand ‖ subCommandParams), over the
+        // subCommandParams bytes as received: decoding accepts any map key order, so a
+        // re-encoding may differ from what the platform MACed (HARD-15).
         let param = opt_bytes(get(&req, 4))?.ok_or(status::PUAT_REQUIRED)?;
         let sub_byte = u8::try_from(subcommand).map_err(|_| status::INVALID_SUBCOMMAND)?;
         let mut message = vec![sub_byte];
-        if let Some(p) = sub_params {
-            message.extend_from_slice(&cbor::encode(p));
+        if let Some(raw) = cbor::map_value_raw(params, &int(2)).map_err(|_| status::INVALID_CBOR)? {
+            message.extend_from_slice(raw);
         }
         let mut entries = self.tpm.resident_entries(uid).map_err(map_tpm_error)?;
         // Delete/update are scoped to the credential's RP, so a token bound to that RP may

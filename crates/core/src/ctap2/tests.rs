@@ -1227,6 +1227,68 @@ fn cred_mgmt_checks_the_auth_param_before_looking_up_the_credential() {
     );
 }
 
+/// A credMgmt request whose `subCommandParams` are the given raw bytes, MACed over `mac_msg`.
+fn cm_raw(p: &Platform, token: &[u8; 32], sub: u8, raw_params: &[u8], mac_msg: &[u8]) -> Vec<u8> {
+    let mut r = vec![cmd::CREDENTIAL_MANAGEMENT, 0xA4];
+    for part in [int(1), Value::Uint(u64::from(sub)), int(2)] {
+        r.extend(cbor::encode(&part));
+    }
+    r.extend_from_slice(raw_params);
+    for part in [
+        int(3),
+        Value::Uint(p.protocol.as_u64()),
+        int(4),
+        p.auth_param(token, mac_msg),
+    ] {
+        r.extend(cbor::encode(&part));
+    }
+    r
+}
+
+#[test]
+fn cred_mgmt_macs_the_sub_command_params_as_received() {
+    let mut a = auth();
+    let rk = (int(7), Value::Map(vec![(text("rk"), Value::Bool(true))]));
+    let id = register(&mut a, vec![rk]);
+    set_pin(&mut a, ALICE, Protocol::Two);
+    let p = Platform::new(&mut a, ALICE, Protocol::Two);
+    let token = cm_token(&mut a, &p);
+    // {2: {"type": "public-key", "id": id}}: the descriptor keys are out of canonical order.
+    let mut raw = vec![0xA1];
+    raw.extend(cbor::encode(&int(2)));
+    raw.push(0xA2);
+    for part in [
+        text("type"),
+        text("public-key"),
+        text("id"),
+        Value::Bytes(id.clone()),
+    ] {
+        raw.extend(cbor::encode(&part));
+    }
+    let canonical = cbor::encode(&cbor::decode(&raw).unwrap());
+    assert_ne!(raw, canonical);
+
+    let mut reencoded = vec![6];
+    reencoded.extend_from_slice(&canonical);
+    assert_eq!(
+        done(prep(
+            &mut a,
+            ALICE,
+            &cm_raw(&p, &token, 6, &raw, &reencoded)
+        )),
+        vec![status::PIN_AUTH_INVALID],
+        "a MAC over a re-encoding is not a MAC over what was sent"
+    );
+    assert_eq!(a.tpm_mut().resident[&ALICE.0].len(), 1);
+    let mut received = vec![6];
+    received.extend_from_slice(&raw);
+    assert_eq!(
+        done(prep(&mut a, ALICE, &cm_raw(&p, &token, 6, &raw, &received))),
+        vec![status::OK]
+    );
+    assert!(a.tpm_mut().resident[&ALICE.0].is_empty());
+}
+
 #[test]
 fn reset_wipes_only_the_callers_state_and_selection_needs_a_touch() {
     let mut a = auth();

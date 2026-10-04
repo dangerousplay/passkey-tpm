@@ -103,6 +103,53 @@ pub fn decode(input: &[u8]) -> Result<Value, CborError> {
     build(input)
 }
 
+/// The raw encoding, as received, of the value stored under `key` in the top-level map
+/// `input`; `None` if `input` is not a map or has no such key.
+///
+/// For checking a MAC over the bytes a peer sent (CTAP 2.1 §6.8 `subCommandParams`), which
+/// may differ from [`encode`] of the decoded value because decoding accepts any map key order.
+///
+/// # Errors
+/// Whatever [`decode`] reports for `input`; never panics.
+pub fn map_value_raw<'a>(input: &'a [u8], key: &Value) -> Result<Option<&'a [u8]>, CborError> {
+    // Full validation first, so the walk below only sees well-formed input.
+    decode(input)?;
+    let key = encode(key);
+    let mut r = Reader::new(input);
+    let Head::Map(count) = read_head(&mut r, 0)? else {
+        return Ok(None);
+    };
+    for _ in 0..count {
+        let k = skip_item(&mut r)?;
+        let v = skip_item(&mut r)?;
+        if k == key.as_slice() {
+            return Ok(Some(v));
+        }
+    }
+    Ok(None)
+}
+
+/// Consumes one complete item from `r` and returns its raw bytes.
+fn skip_item<'a>(r: &mut Reader<'a>) -> Result<&'a [u8], CborError> {
+    let start = r.clone();
+    let mut pending: usize = 1;
+    while let Some(left) = pending.checked_sub(1) {
+        pending = left;
+        // Depth was checked by `decode`; 1 keeps `read_head` from refusing nested heads.
+        let more = match read_head(r, 1)? {
+            Head::Array(n) => n,
+            Head::Map(n) => n.saturating_mul(2),
+            _ => 0,
+        };
+        pending = pending.saturating_add(more);
+    }
+    let used = start
+        .remaining()
+        .checked_sub(r.remaining())
+        .ok_or(CborError::Truncated)?;
+    Ok(start.clone().take(used)?)
+}
+
 /// Splits an initial byte into (major type, additional info).
 fn split_initial(initial: u8) -> (u8, u8) {
     (initial >> 5, initial & 0x1f)
@@ -821,7 +868,8 @@ mod proofs {
     //! `utf8_for_each`), plus proptest and the `cbor_decode` fuzz target for whole-`decode`
     //! behaviour and scan/build agreement. A whole-`decode` harness is not included: CBMC
     //! unrolls the recursive drop glue of `Value` trees exponentially, and even a 1-byte
-    //! bound did not finish within 5 minutes.
+    //! bound did not finish within 5 minutes. For the same reason `map_value_raw` is covered
+    //! through `skip_item`.
 
     use super::*;
 
@@ -871,6 +919,19 @@ mod proofs {
                 26 => assert!(used == 4 && (0x1_0000..=0xffff_ffff).contains(&arg)),
                 _ => assert!(info == 27 && used == 8 && arg > 0xffff_ffff),
             }
+        }
+    }
+
+    /// The raw-span walker behind `map_value_raw` never panics and returns a prefix of its
+    /// input that it consumed exactly.
+    #[kani::proof]
+    #[kani::unwind(10)]
+    fn skip_item_never_panics() {
+        let buf: [u8; SCAN_N] = kani::any();
+        let len: usize = kani::any_where(|l| *l <= SCAN_N);
+        let mut r = Reader::new(&buf[..len]);
+        if let Ok(raw) = skip_item(&mut r) {
+            assert!(!raw.is_empty() && raw.len() + r.remaining() == len);
         }
     }
 
@@ -1258,6 +1319,30 @@ mod tests {
         }
     }
 
+    #[test]
+    fn map_value_raw_returns_the_bytes_as_received() {
+        // {2: {"b": 1, "a": 2}, 1: 0}: both maps out of canonical order.
+        let input = hex("a2 02 a2 6162 01 6161 02 01 00");
+        assert_eq!(
+            map_value_raw(&input, &Value::Uint(2)),
+            Ok(Some(&input[2..9]))
+        );
+        assert_eq!(
+            map_value_raw(&input, &Value::Uint(1)),
+            Ok(Some(&input[10..]))
+        );
+        assert_eq!(map_value_raw(&input, &Value::Uint(3)), Ok(None));
+        assert_eq!(map_value_raw(&hex("82 01 02"), &Value::Uint(0)), Ok(None));
+        assert_eq!(
+            map_value_raw(&hex("a2 01 00 01 00"), &Value::Uint(1)),
+            Err(CborError::DuplicateKey)
+        );
+        assert_eq!(
+            map_value_raw(&hex("a1 01 1800"), &Value::Uint(1)),
+            Err(CborError::NonCanonical)
+        );
+    }
+
     proptest! {
         #[test]
         fn encode_decode_round_trip(v in arb_value()) {
@@ -1301,6 +1386,35 @@ mod tests {
                 bytes[i] = byte;
             }
             assert_passes_agree(&bytes)?;
+        }
+
+        #[test]
+        fn map_value_raw_finds_each_entry_as_encoded(v in arb_value()) {
+            prop_assume!(depth(&v) <= MAX_DEPTH);
+            let bytes = encode(&v);
+            prop_assume!(bytes.len() <= MAX_INPUT);
+            match canonicalize(v) {
+                Value::Map(entries) => {
+                    for (k, val) in &entries {
+                        let want = encode(val);
+                        prop_assert_eq!(map_value_raw(&bytes, k), Ok(Some(want.as_slice())));
+                    }
+                    let absent = Value::Text("\u{10ffff} absent".into());
+                    if !entries.iter().any(|(k, _)| *k == absent) {
+                        prop_assert_eq!(map_value_raw(&bytes, &absent), Ok(None));
+                    }
+                }
+                _ => prop_assert_eq!(map_value_raw(&bytes, &Value::Uint(0)), Ok(None)),
+            }
+        }
+
+        #[test]
+        fn map_value_raw_never_panics(bytes in prop::collection::vec(any::<u8>(), 0..300), key in arb_leaf()) {
+            match map_value_raw(&bytes, &key) {
+                Ok(Some(raw)) => prop_assert!(decode(raw).is_ok()),
+                Ok(None) => {}
+                Err(e) => prop_assert_eq!(Err(e), decode(&bytes).map(|_| ())),
+            }
         }
 
         #[test]
