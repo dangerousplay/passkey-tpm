@@ -1,6 +1,6 @@
 # Project Structure
 
-**Root:** `/home/davi_henrique/projetos/tpm-fido2-thinkpad-linux`
+**Root:** `tpm-fido2-thinkpad-linux` (legacy Go repository)
 
 ## Directory Tree
 
