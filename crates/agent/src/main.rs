@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use passkey_tpm_agent::{Effect, Hid};
-use passkey_tpm_transport_uhid::{fido_device_params, UhidDevice, UhidEvent, UhidWriter};
+use passkey_tpm_transport_uhid::{
+    fido_device_params, DeviceParams, UhidDevice, UhidEvent, UhidWriter,
+};
 use passkey_tpm_uv::seat::{self, Logind, SessionPolicy};
 use tokio::sync::mpsc;
 use zbus::Connection;
@@ -109,9 +111,20 @@ fn watch_seat(bus: Connection, uid: u32, tx: mpsc::UnboundedSender<Input>) {
     });
 }
 
+/// The FIDO device parameters, with the owner's uid in the physical path (`HID_PHYS`) so
+/// tools and tests can tell users' devices apart.
+fn device_params(uid: u32) -> DeviceParams {
+    let mut params = fido_device_params();
+    params.phys = format!("passkey-tpm-agent/uid={uid}");
+    params
+}
+
 /// Opens `/dev/uhid`, creates the device and starts the thread that forwards its events.
-fn open_device(tx: &mpsc::UnboundedSender<Input>) -> std::io::Result<UhidWriter> {
-    let mut device = UhidDevice::create(&fido_device_params())?;
+fn open_device(
+    params: &DeviceParams,
+    tx: &mpsc::UnboundedSender<Input>,
+) -> std::io::Result<UhidWriter> {
+    let mut device = UhidDevice::create(params)?;
     let writer = device.try_clone_writer()?;
     let reader_tx = tx.clone();
     std::thread::spawn(move || loop {
@@ -198,6 +211,7 @@ async fn main() -> ExitCode {
         }
     };
 
+    let params = device_params(uid);
     let (tx, mut rx) = mpsc::unbounded_channel();
     watch_seat(bus.clone(), uid, tx.clone());
 
@@ -219,8 +233,8 @@ async fn main() -> ExitCode {
                 Some(Input::Reply(response)) => apply(hid.on_broker_reply(&response), link, &bus, &tx),
                 Some(Input::Seat(true)) if !present => {
                     let result = match &writer {
-                        Some(w) => w.recreate(&fido_device_params()),
-                        None => open_device(&tx).map(|w| writer = Some(w)),
+                        Some(w) => w.recreate(&params),
+                        None => open_device(&params, &tx).map(|w| writer = Some(w)),
                     };
                     match result {
                         Ok(()) => {

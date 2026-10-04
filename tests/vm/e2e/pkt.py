@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import glob
+import json
 import os
 import pwd
 import socket
@@ -55,21 +56,92 @@ class VirtualFinger:
         self._thread.join(timeout=2)
 
 
-def hidraw_nodes() -> set[str]:
+def hidraw_nodes(uid: int | None = None) -> set[str]:
+    """passkey-tpm hidraw nodes; with `uid`, only that user's agent's (HID_PHYS carries it)."""
     nodes = set()
     for uevent in glob.glob("/sys/class/hidraw/hidraw*/device/uevent"):
-        if "HID_NAME=passkey-tpm" in Path(uevent).read_text():
-            nodes.add("/dev/" + Path(uevent).parent.parent.name)
+        text = Path(uevent).read_text()
+        if "HID_NAME=passkey-tpm" not in text:
+            continue
+        if uid is not None and f"HID_PHYS=passkey-tpm-agent/uid={uid}" not in text.splitlines():
+            continue
+        nodes.add("/dev/" + Path(uevent).parent.parent.name)
     return nodes
+
+
+def wait_for(cond, timeout: float = 10, what: str = "condition"):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        value = cond()
+        if value:
+            return value
+        time.sleep(0.1)
+    raise TimeoutError(f"timed out waiting for {what}")
+
+
+# Seat sessions (HARD-01): the broker serves, and the agent exposes a device for, only the
+# user in front of seat0. Each test user gets an autologin getty on its own VT; `activate`
+# switches VTs like a fast user switch.
+VT = {"alice": 2, "bob": 3}
+
+
+def login(user: str) -> None:
+    """Starts an autologin session for `user` on its VT (seat0)."""
+    vt = VT[user]
+    dropin = Path(f"/run/systemd/system/getty@tty{vt}.service.d")
+    dropin.mkdir(parents=True, exist_ok=True)
+    (dropin / "autologin.conf").write_text(
+        "[Service]\nExecStart=\n"
+        f"ExecStart=-/sbin/agetty --autologin {user} --noclear %I $TERM\n"
+    )
+    run("systemctl", "daemon-reload")
+    run("systemctl", "restart", f"getty@tty{vt}.service")
+    wait_for(lambda: seat_session(user), what=f"{user}'s seat session")
+
+
+def seat_session(user: str) -> str | None:
+    out = run("loginctl", "list-sessions", "--no-legend", check=False).stdout
+    for line in out.splitlines():
+        fields = line.split()
+        # SESSION UID USER SEAT LEADER CLASS TTY ...
+        if len(fields) >= 4 and fields[2] == user and fields[3] == "seat0":
+            return fields[0]
+    return None
+
+
+def is_active(user: str) -> bool:
+    session = seat_session(user)
+    if session is None:
+        return False
+    out = run("loginctl", "show-session", session, "-p", "Active", "--value", check=False)
+    return out.stdout.strip() == "yes"
+
+
+def activate(user: str) -> None:
+    """Brings `user`'s VT to the foreground (no-op if it already is)."""
+    if not is_active(user):
+        run("chvt", str(VT[user]))
+        wait_for(lambda: is_active(user), what=f"{user} active on seat0")
+
+
+def busctl_ctap(user: str, request: bytes) -> bytes:
+    """Calls the broker directly as `user` (bypassing any agent)."""
+    out = run(
+        "runuser", "-u", user, "--", "busctl", "--system", "--json=short", "call",
+        "io.github.dangerousplay.PasskeyTpm1", "/io/github/dangerousplay/PasskeyTpm1",
+        "io.github.dangerousplay.PasskeyTpm1", "Ctap", "ay",
+        str(len(request)), *(str(b) for b in request),
+    ).stdout
+    return bytes(json.loads(out)["data"][0])
 
 
 @dataclass
 class Agent:
-    """A passkey-tpm-agent running as `user`, and the hidraw node of its virtual key."""
+    """A passkey-tpm-agent running as `user`. Its device exists only while `user` is active on
+    seat0, and gets a new hidraw node each time it comes back."""
 
     user: str
     process: subprocess.Popen
-    hidraw: str
     log: Path
     uid: int = field(init=False)
 
@@ -79,7 +151,6 @@ class Agent:
     @classmethod
     def start(cls, user: str, log_dir: Path) -> "Agent":
         run("setfacl", "-m", f"u:{user}:rw", "/dev/uhid")
-        before = hidraw_nodes()
         log = log_dir / f"agent-{user}.log"
         process = subprocess.Popen(
             [str(LIBEXEC / "passkey-tpm-agent")],
@@ -90,23 +161,34 @@ class Agent:
             stdout=log.open("w"),
             stderr=subprocess.STDOUT,
         )
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            new = {n for n in hidraw_nodes() - before if os.path.exists(n)}
-            if new:
-                return cls(user, process, new.pop(), log)
-            if process.poll() is not None:
-                break
-            time.sleep(0.1)
-        process.kill()
-        raise RuntimeError(f"agent for {user} created no device; log:\n{log.read_text()}")
+        agent = cls(user, process, log)
+        try:
+            agent.hidraw  # activates the user and waits for the device
+        except TimeoutError:
+            process.kill()
+            raise RuntimeError(f"agent for {user} created no device; log:\n{log.read_text()}")
+        return agent
+
+    @property
+    def hidraw(self) -> str:
+        """This agent's device node, after bringing its user to the foreground."""
+        activate(self.user)
+
+        def node():
+            if self.process.poll() is not None:
+                raise RuntimeError(f"agent for {self.user} exited:\n{self.log.read_text()}")
+            nodes = {n for n in hidraw_nodes(self.uid) if os.path.exists(n)}
+            return nodes.pop() if len(nodes) == 1 else None
+
+        return wait_for(node, what=f"{self.user}'s device")
 
     def ctap(self) -> Ctap2:
-        """A CTAP2 session on this agent's device only."""
+        """A CTAP2 session on this agent's device only (its user is made active first)."""
+        path = self.hidraw
         for dev in CtapHidDevice.list_devices():
-            if dev.descriptor.path == self.hidraw:
+            if dev.descriptor.path == path:
                 return Ctap2(dev)
-        raise RuntimeError(f"{self.hidraw} not found by python-fido2")
+        raise RuntimeError(f"{path} not found by python-fido2")
 
     def stop(self) -> None:
         self.process.terminate()

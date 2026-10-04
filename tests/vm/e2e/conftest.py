@@ -1,4 +1,5 @@
-"""Session fixtures: report directory, virtual finger, enrolled users, one agent per user."""
+"""Session fixtures: report directory, virtual finger, enrolled users, seat sessions, one agent
+per user."""
 
 from __future__ import annotations
 
@@ -34,17 +35,35 @@ def enrolled(finger) -> list[str]:
 
 
 @pytest.fixture(scope="session")
-def alice(enrolled, report_dir):
+def seats(enrolled) -> list[str]:
+    """alice and bob logged in on seat0 (VT 2 and 3); alice in the foreground."""
+    for user in enrolled:
+        pkt.login(user)
+    pkt.activate("alice")
+    return enrolled
+
+
+@pytest.fixture(scope="session")
+def alice(seats, report_dir):
     agent = pkt.Agent.start("alice", report_dir)
     yield agent
     agent.stop()
 
 
 @pytest.fixture(scope="session")
-def bob(enrolled, report_dir):
+def bob(seats, report_dir):
     agent = pkt.Agent.start("bob", report_dir)
+    pkt.activate("alice")  # starting bob's agent brought bob to the front
     yield agent
     agent.stop()
+
+
+@pytest.fixture(autouse=True)
+def alice_in_front_afterwards(request):
+    """Tests may switch users; later tests expect alice in the foreground."""
+    yield
+    if "seats" in request.fixturenames:
+        pkt.activate("alice")
 
 
 @pytest.fixture
