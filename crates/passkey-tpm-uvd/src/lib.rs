@@ -207,6 +207,15 @@ impl Broker {
         if request.len() > MAX_MSG {
             return vec![STATUS_INVALID_LENGTH];
         }
+        // Audit trail in the journal: which user asked for which CTAP command.
+        #[allow(clippy::print_stderr)]
+        {
+            eprintln!(
+                "request uid={uid} command={:#04x} len={}",
+                request.first().copied().unwrap_or(0),
+                request.len()
+            );
+        }
         let username = self.users.username(uid);
         let uv_enrolled = match &username {
             Some(name) => fprintd::has_enrolled(&self.fprintd, name)
