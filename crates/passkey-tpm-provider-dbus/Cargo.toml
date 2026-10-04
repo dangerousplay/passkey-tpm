@@ -1,0 +1,15 @@
+[package]
+name = "passkey-tpm-provider-dbus"
+description = "D-Bus provider interface for passkey-tpm (credentialsd integration)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

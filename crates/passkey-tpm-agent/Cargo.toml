@@ -1,0 +1,22 @@
+[package]
+name = "passkey-tpm-agent"
+description = "passkey-tpm per-user session agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+zbus = { version = "5.19", default-features = false, features = ["tokio"] }
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
+notify-rust = { version = "4.18", default-features = false, features = ["z"] }
+passkey-tpm-core = { path = "../passkey-tpm-core" }
+passkey-tpm-transport-uhid = { path = "../passkey-tpm-transport-uhid" }
+passkey-tpm-wire = { path = "../passkey-tpm-wire" }
+getrandom = "0.3"
+
+[lints]
+workspace = true

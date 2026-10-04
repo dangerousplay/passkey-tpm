@@ -1,0 +1,30 @@
+[package]
+name = "passkey-tpm-uvd"
+description = "passkey-tpm privileged broker daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+zbus = { version = "5.19", default-features = false, features = ["tokio"] }
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
+tokio-util = "0.7"
+nix = { version = "0.31", default-features = false, features = ["user"] }
+passkey-tpm-core = { path = "../passkey-tpm-core" }
+passkey-tpm-tpm = { path = "../passkey-tpm-tpm" }
+passkey-tpm-uv = { path = "../passkey-tpm-uv" }
+tss-esapi = "7.7"
+
+[dev-dependencies]
+passkey-tpm-testkit = { path = "../passkey-tpm-testkit" }
+passkey-tpm-uv = { path = "../passkey-tpm-uv", features = ["mock"] }
+passkey-tpm-wire = { path = "../passkey-tpm-wire" }
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+sha2 = "0.10"
+
+[lints]
+workspace = true

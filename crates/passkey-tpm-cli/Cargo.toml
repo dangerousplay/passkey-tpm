@@ -1,0 +1,18 @@
+[package]
+name = "passkey-tpm-cli"
+description = "passkey-tpm command line administration tool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+passkey-tpm-tpm = { path = "../passkey-tpm-tpm" }
+passkey-tpm-wire = { path = "../passkey-tpm-wire" }
+tss-esapi = "7.7"
+
+[lints]
+workspace = true
