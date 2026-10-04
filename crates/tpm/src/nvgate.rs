@@ -13,14 +13,16 @@
 //! high-entropy secrets and set `noDA`, so they keep working during a DA lockout.
 
 use tss_esapi::attributes::NvIndexAttributesBuilder;
-use tss_esapi::constants::SessionType;
+use tss_esapi::constants::{CapabilityType, SessionType};
 use tss_esapi::handles::{
     AuthHandle, NvIndexHandle, NvIndexTpmHandle, ObjectHandle, SessionHandle, TpmHandle,
 };
 use tss_esapi::interface_types::algorithm::HashingAlgorithm;
 use tss_esapi::interface_types::resource_handles::Provision;
 use tss_esapi::interface_types::session_handles::PolicySession;
-use tss_esapi::structures::{Auth, Digest, Nonce, NvPublic, NvPublicBuilder, SymmetricDefinition};
+use tss_esapi::structures::{
+    Auth, CapabilityData, Digest, Nonce, NvPublic, NvPublicBuilder, SymmetricDefinition,
+};
 use tss_esapi::Context;
 
 use crate::error::{Error, Result};
@@ -164,7 +166,7 @@ pub fn check(ctx: &mut Context, srk: &Srk, index: u32, auth: &[u8; 32]) -> Resul
 
 /// Replaces a gate's secret: verifies `old`, then undefines and redefines the index with
 /// `new`. The Name is unchanged. The caller must persist `new` first, so a crash between
-/// the two steps can be repaired by [`define`] on the next start.
+/// the two steps can be repaired by [`redefine`] on the next start.
 ///
 /// # Errors
 /// TPM errors if `old` is wrong (nothing is changed then) or the TPM refuses.
@@ -177,13 +179,47 @@ pub fn rotate(
     new: &[u8; 32],
 ) -> Result<Vec<u8>> {
     check(ctx, srk, index, old)?;
-    let before = name(ctx, index, lockout)?;
-    undefine(ctx, index)?;
+    redefine(ctx, srk, index, lockout, new)
+}
+
+/// Defines the gate at `index` with `new`, first undefining it if it exists. Needs no old
+/// secret, so it can complete a rotation that was interrupted between the undefine and the
+/// define (or before either); the caller must have verified the old secret beforehand.
+///
+/// # Errors
+/// [`Error::Corrupt`] if a different index occupies `index`; TPM errors otherwise.
+pub fn redefine(
+    ctx: &mut Context,
+    srk: &Srk,
+    index: u32,
+    lockout: Lockout,
+    new: &[u8; 32],
+) -> Result<Vec<u8>> {
+    let before = if exists(ctx, index)? {
+        let before = name(ctx, index, lockout)?;
+        undefine(ctx, index)?;
+        Some(before)
+    } else {
+        None
+    };
     let after = define(ctx, srk, index, lockout, new)?;
-    if after != before {
+    if before.is_some_and(|b| b != after) {
         return Err(Error::Corrupt("gate Name changed on redefinition"));
     }
     Ok(after)
+}
+
+/// Whether an NV index is defined at `index`.
+///
+/// # Errors
+/// TPM errors.
+pub fn exists(ctx: &mut Context, index: u32) -> Result<bool> {
+    let (data, _) =
+        ctx.execute_without_session(|ctx| ctx.get_capability(CapabilityType::Handles, index, 1))?;
+    let CapabilityData::Handles(list) = data else {
+        return Err(Error::Corrupt("handle list"));
+    };
+    Ok(list.iter().next().is_some_and(|h| u32::from(*h) == index))
 }
 
 /// Removes a gate (Owner authorisation, empty by default).

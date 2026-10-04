@@ -76,6 +76,7 @@ fn define_all(
         up,
         cred_mac_key: AuthValue(random32()?),
         srk_name: srk.name.clone(),
+        pending_pin: None,
     })
 }
 

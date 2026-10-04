@@ -98,13 +98,30 @@ impl TpmBackend {
         if self.users.contains_key(&uid.0) {
             return Ok(true);
         }
-        let store = match std::fs::read(self.user_dir(uid).join(GATES_FILE)) {
+        let mut store = match std::fs::read(self.user_dir(uid).join(GATES_FILE)) {
             Ok(bytes) => GateStore::decode(&bytes).map_err(|_| Error::Corrupt("gates.v1"))?,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(e) => return Err(e.into()),
         };
+        if store.pending_pin.is_some() {
+            // A PIN change was interrupted (HARD-06): finish it, so the new PIN is in force.
+            let srk = self.srk()?;
+            if store.srk_name != srk.name {
+                return Err(Error::SrkMismatch);
+            }
+            store = pin::complete(&mut self.ctx, &srk, &store)?;
+            self.write_gates(uid, &store)?;
+        }
         self.insert_user(uid, store)?;
         Ok(true)
+    }
+
+    /// Persists `uid`'s gate state.
+    fn write_gates(&self, uid: Uid, store: &GateStore) -> Result<()> {
+        let bytes = store.encode().map_err(|_| Error::Corrupt("gates.v1"))?;
+        let dir = self.user_dir(uid);
+        create_private_dir(&dir)?;
+        Ok(fsutil::write_atomic(&dir.join(GATES_FILE), &bytes)?)
     }
 
     fn insert_user(&mut self, uid: Uid, store: GateStore) -> Result<()> {
@@ -126,15 +143,7 @@ impl TpmBackend {
         let srk = self.srk()?;
         let indexes = self.allocate_nv_indexes()?;
         let store = gates::provision(&mut self.ctx, &srk, indexes)?;
-        let dir = self.user_dir(uid);
-        let persisted = store
-            .encode()
-            .map_err(|_| Error::Corrupt("gates.v1"))
-            .and_then(|bytes| {
-                create_private_dir(&dir)?;
-                Ok(fsutil::write_atomic(&dir.join(GATES_FILE), &bytes)?)
-            });
-        if let Err(e) = persisted {
+        if let Err(e) = self.write_gates(uid, &store) {
             gates::discard(&mut self.ctx, &store);
             return Err(e);
         }
@@ -173,6 +182,32 @@ impl TpmBackend {
 }
 
 impl TpmBackend {
+    /// Computes `uid`'s next gate state with `f`, persists it, then caches it. On any error
+    /// the cached state is dropped, so the next request reloads (and repairs) it from disk.
+    fn replace_gates(
+        &mut self,
+        uid: Uid,
+        f: impl FnOnce(&mut Context, &Srk, &User) -> Result<GateStore>,
+    ) -> std::result::Result<(), TpmError> {
+        let result = self.with_user(uid, f).and_then(|store| {
+            self.write_gates(uid, &store)
+                .map_err(|e| e.to_tpm_error())?;
+            Ok(store)
+        });
+        match result {
+            Ok(store) => {
+                if let Some(user) = self.users.get_mut(&uid.0) {
+                    user.store = store;
+                }
+                Ok(())
+            }
+            Err(e) => {
+                self.users.remove(&uid.0);
+                Err(e)
+            }
+        }
+    }
+
     fn revoked_tags(&self, uid: Uid) -> std::result::Result<Vec<[u8; TAG_LEN]>, TpmError> {
         match std::fs::read(self.user_dir(uid).join(REVOKED_FILE)) {
             Ok(bytes) if bytes.len() % TAG_LEN == 0 => Ok(bytes.as_chunks::<TAG_LEN>().0.to_vec()),
@@ -286,17 +321,15 @@ impl TpmOps for TpmBackend {
         old: Option<&[u8; 16]>,
         new: &[u8; 16],
     ) -> std::result::Result<(), TpmError> {
-        let dir = self.user_dir(uid);
-        let updated = self.with_user(uid, |ctx, srk, user| match old {
-            None => pin::set_pin(ctx, srk, &user.store, new),
-            Some(old) => pin::change_pin(ctx, srk, &user.store, old, new),
+        let pending = self.with_user(uid, |ctx, srk, user| match old {
+            None => pin::begin_set(ctx, srk, &user.store, new),
+            Some(old) => pin::begin_change(ctx, srk, &user.store, old, new),
         })?;
-        let bytes = updated.encode().map_err(|_| TpmError::Unavailable)?;
-        fsutil::write_atomic(&dir.join(GATES_FILE), &bytes).map_err(|_| TpmError::Unavailable)?;
-        if let Some(user) = self.users.get_mut(&uid.0) {
-            user.store = updated;
-        }
-        Ok(())
+        // Persist the new PIN before the NV index is redefined, then complete and clear the
+        // pending change (HARD-06). A crash or error in between is completed on the next load,
+        // so the PIN is the old or the new one, never neither.
+        self.replace_gates(uid, |_, _, _| Ok(pending))?;
+        self.replace_gates(uid, |ctx, srk, user| pin::complete(ctx, srk, &user.store))
     }
 
     fn verify_pin(&mut self, uid: Uid, pin_hash: &[u8; 16]) -> std::result::Result<(), TpmError> {
