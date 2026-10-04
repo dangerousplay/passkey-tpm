@@ -13,7 +13,7 @@ There is no installable build yet. Testers need `.deb`, `.rpm` and Arch packages
 - [x] Every package and `checksums.txt` has a keyless Sigstore signature tied to the release workflow identity
 - [x] Every checksummed file has SLSA build provenance (GitHub attestation)
 - [x] Pre-release versions sort before the final release in dpkg, rpm and pacman
-- [ ] `v0.1.0-beta.1` published after the P1 security fixes land
+- [ ] `v0.1.0-beta.1` published after the P1 security fixes land (signed draft built 2026-10-04; publish after testing)
 
 ## Out of Scope
 
@@ -65,12 +65,12 @@ There is no installable build yet. Testers need `.deb`, `.rpm` and Arch packages
 
 | ID | Story | Phase | Status |
 |---|---|---|---|
-| REL-01 | Signed beta packages | Execute | Verified (snapshot) |
-| REL-02 | Signed beta packages | Execute | Implemented — needs a real tag run |
-| REL-03 | Signed beta packages | Execute | Implemented — needs a real tag run |
+| REL-01 | Signed beta packages | Execute | Verified (run 37243451613) |
+| REL-02 | Signed beta packages | Execute | Verified (cosign verify-blob on v0.1.0-beta.1 assets) |
+| REL-03 | Signed beta packages | Execute | Verified (gh attestation verify) |
 | REL-04 | Signed beta packages | Execute | Verified (local tag snapshot + `vercmp`) |
 | REL-05 | Signed beta packages | Execute | Verified |
-| REL-06 | Gated beta | Tasks | Ready (HARD-01..04 Verified 2026-10-04) |
+| REL-06 | Gated beta | Execute | Verified (HARD-01..04 before tag) |
 | REL-07 | Gated beta | Tasks | Pending |
 
 **Coverage:** 7 total, 7 mapped to tasks, 0 unmapped

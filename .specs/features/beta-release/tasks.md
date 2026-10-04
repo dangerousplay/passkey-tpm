@@ -2,7 +2,7 @@
 
 **Spec:** `.specs/features/beta-release/spec.md`
 **Testing:** `.specs/codebase/TESTING.md` (xtask/CI/config layer: gate = running the task)
-**Status:** In progress
+**Status:** Signed draft pre-release built and verified (2026-10-04); testing before B11 notes + B12 publish
 
 ## Execution Plan
 
@@ -24,6 +24,14 @@ Next:  B6 → B7 ──────────────┐
 | B3: Release workflow OIDC + provenance | ✅ | 803f7a8 | `id-token: write`, `attestations: write`; cosign-installer v4.1.2 (cosign v3.1.3), attest-build-provenance v4.2.2 over `checksums.txt`; actions pinned by SHA |
 | B4: Arch pre-release version | ✅ | 803f7a8 | nfpm drops `Prerelease` for Arch unless an epoch is set → `epoch: "0"` override (L-010) |
 | B5: Version bump + recipes | ✅ | dde4fa5 | workspace `0.1.0-beta.1`; Debian `0.1.0~beta.1-1`; Fedora `Version: 0.1.0~beta.1` + `upstream_version`; PKGBUILD `pkgver=0.1.0beta1`, `_tag`. Also untracked `scripts/__pycache__` (1192a89) |
+
+| B6 | ✅ (changed) | — | Pushed as branch `release/v0.1.0` (no PR; CI runs on PRs/main only, so the gate ran inside the release workflow) |
+| B7 | ⏭ skipped | — | User asked for the real build; the first signed run on the real tag succeeded |
+| B9 | ✅ | — | HARD-01..04 Verified (also 13 more HARD-*); 254 tests, Verus 103/0, VM 41/41 |
+| B10 | ✅ | b7086da | Tag `v0.1.0-beta.1` (SSH-signed) on `release/v0.1.0`; release run 37243451613 green (gate, notes, build+sign, provenance) |
+| B11 | ✅ (verify) | — | 2026-10-04: `sha256sum -c` OK for all 4 files; `cosign verify-blob` (v3.1.3, tag identity regexp) **Verified OK** for .deb, .rpm, .pkg.tar.zst, checksums.txt; `gh attestation verify` OK for all 3 packages + tarball. Package versions: deb `0.1.0~beta.1`, rpm `0.1.0~beta.1`, Arch `0:0.1.0beta.1-1`. Known-issues section in the notes still to add |
+
+**Draft pre-release:** https://github.com/dangerousplay/passkey-tpm/releases (draft, `v0.1.0-beta.1`) — under test; not published yet (B12).
 
 ## Task Breakdown (remaining)
 

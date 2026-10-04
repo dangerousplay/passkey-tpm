@@ -1,7 +1,7 @@
 # State
 
 **Last Updated:** 2026-10-04
-**Current Work:** Branch `release/v0.1.0-beta.1` (not pushed): Sigstore-signed packages, dependency upgrade, and 17 of 21 security-hardening requirements (all P1) done and verified (254 tests, Verus 103/0, VM 41/41). Next: push + fork rehearsal + tag the beta (`.specs/features/beta-release/` B6–B12); hardening phases 2–3 (G2–G4 open); then the CTAP crates (`.specs/features/ctap-crates/`, Discuss C-G1..C-G5).
+**Current Work:** Signed draft pre-release `v0.1.0-beta.1` built from branch `release/v0.1.0` (run 37243451613); cosign bundles and build provenance verified for every package. Under test. Next: known-issues notes + publish (beta-release B11–B12); hardening HARD-07/10/13 wait on G2–G4, HARD-16 open; then the CTAP crates (Discuss C-G1..C-G5).
 
 ---
 
