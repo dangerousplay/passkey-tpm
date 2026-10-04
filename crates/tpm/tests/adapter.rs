@@ -2,9 +2,13 @@ mod support;
 
 use p256::ecdsa::signature::hazmat::PrehashVerifier;
 use p256::ecdsa::{Signature, VerifyingKey};
+use passkey_tpm_core::ctap2::{cmd, status, Authenticator, Step, UserInfo};
 use passkey_tpm_core::tpm_iface::{CredProtect, GateKind, RpIdHash, TpmOps, Uid};
 use passkey_tpm_tpm::adapter::TpmBackend;
+use passkey_tpm_tpm::nvgate;
 use support::swtpm::Swtpm;
+use tss_esapi::constants::CapabilityType;
+use tss_esapi::structures::CapabilityData;
 
 const RP: RpIdHash = RpIdHash([0x61; 32]);
 
@@ -13,6 +17,51 @@ fn state_dir(name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("passkey-tpm-adapter-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     dir
+}
+
+/// NV indexes defined in our allocation range.
+fn our_nv_indexes(ctx: &mut tss_esapi::Context) -> Vec<u32> {
+    let (data, _) = ctx
+        .get_capability(CapabilityType::Handles, nvgate::NV_BASE, 1024)
+        .expect("handles");
+    let CapabilityData::Handles(list) = data else {
+        panic!("not a handle list");
+    };
+    list.iter()
+        .map(|h| u32::from(*h))
+        .filter(|i| (nvgate::NV_BASE..=nvgate::NV_LAST).contains(i))
+        .collect()
+}
+
+/// HARD-09: read-only calls from a uid that never registered leave no trace.
+#[test]
+fn read_only_calls_provision_nothing() {
+    let tpm = Swtpm::start();
+    let dir = state_dir("readonly");
+    let alice = Uid(1000);
+    {
+        let mut a = Authenticator::new(TpmBackend::new(tpm.context(), dir.clone()));
+        let info = UserInfo { uv_enrolled: true };
+        let Step::Done(resp) = a.prepare(alice, info, &[cmd::GET_INFO], 0) else {
+            panic!("getInfo needs no prompt");
+        };
+        assert_eq!(resp[0], status::OK);
+        let backend = a.tpm_mut();
+        assert_eq!(backend.pin_is_set(alice), Ok(false));
+        assert_eq!(backend.pin_retries(alice), Ok(8));
+        assert_eq!(backend.open_credential_id(alice, &RP, &[0; 80]), Ok(None));
+        assert_eq!(backend.resident_entries(alice), Ok(Vec::new()));
+        assert!(backend.verify_pin(alice, &[0; 16]).is_err(), "no PIN set");
+    }
+    assert!(!dir.join("1000").exists(), "no state dir");
+    assert_eq!(our_nv_indexes(&mut tpm.context()), Vec::<u32>::new());
+    {
+        let mut backend = TpmBackend::new(tpm.context(), dir.clone());
+        backend.reset_user(alice).expect("reset of an unknown user");
+    }
+    assert!(!dir.join("1000").exists(), "no state dir after reset");
+    assert_eq!(our_nv_indexes(&mut tpm.context()), Vec::<u32>::new());
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]

@@ -68,3 +68,28 @@ fn gate_store_survives_a_round_trip_through_disk_format_and_removal_works() {
     gates::remove(&mut ctx, &store).expect("remove");
     assert!(gates::names(&mut ctx, &store).is_err(), "gates gone");
 }
+
+fn defined(ctx: &mut tss_esapi::Context, index: u32) -> bool {
+    ctx.tr_from_tpm_public(TpmHandle::NvIndex(
+        NvIndexTpmHandle::new(index).expect("idx"),
+    ))
+    .is_ok()
+}
+
+/// HARD-09: a provisioning that fails part-way removes the gates it defined, and only those.
+#[test]
+fn failed_provisioning_undefines_what_it_created() {
+    let tpm = Swtpm::start();
+    let mut ctx = tpm.context();
+    let srk = srk::ensure(&mut ctx).expect("SRK");
+    let idx = indexes(40);
+    // Someone else's index where the third gate goes: the third define fails.
+    nvgate::define(&mut ctx, &srk, idx.up, Lockout::Exempt, &[7; 32]).expect("foreign index");
+    assert!(gates::provision(&mut ctx, &srk, idx).is_err());
+    assert!(!defined(&mut ctx, idx.pin), "PIN gate undefined");
+    assert!(!defined(&mut ctx, idx.uv), "UV gate undefined");
+    assert!(
+        defined(&mut ctx, idx.up),
+        "the index we didn't create stays"
+    );
+}

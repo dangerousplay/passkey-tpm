@@ -255,7 +255,9 @@ impl<T: TpmOps> Authenticator<T> {
         hmac: Option<&HmacRequest>,
         number_of_credentials: Option<usize>,
     ) -> Parsed<Vec<u8>> {
-        let ext = match hmac {
+        // A credential created without hmac-secret has no CredRandom: the extension output
+        // is omitted, the assertion itself still succeeds (CTAP 2.1 §12.5).
+        let ext = match hmac.filter(|_| found.blobs.hmac.is_some()) {
             None => None,
             Some(h) => {
                 let out = self.hmac_secret_output(uid, rp_id_hash, found, ev, h)?;

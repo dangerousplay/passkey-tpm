@@ -6,7 +6,7 @@
 //! dictionary-attack protection, and is never stored.
 
 use argon2::{Algorithm, Argon2, Params, Version};
-use passkey_tpm_wire::gatestore::GateStore;
+use passkey_tpm_wire::gatestore::{AuthValue, GateStore, PendingPin};
 use tss_esapi::Context;
 use zeroize::Zeroizing;
 
@@ -36,15 +36,43 @@ pub fn derive_auth(pin_hash: &[u8; 16], salt: &[u8; 32]) -> Result<Zeroizing<[u8
     Ok(out)
 }
 
-/// Sets the first PIN. Returns the updated store, which the caller must persist.
-///
-/// The caller should persist the returned store *before* this is called again after a crash:
-/// if the process dies between the NV undefine and define, the gate must be re-defined
-/// from the new value (see [`nvgate::rotate`]).
+/// Sets the first PIN: [`begin_set`] then [`complete`]. Returns the updated store, which the
+/// caller must persist. The broker persists the [`begin_set`] result first instead (HARD-06).
 ///
 /// # Errors
-/// [`Error::Corrupt`] if a PIN is already set; TPM errors otherwise.
+/// As [`begin_set`] and [`complete`].
 pub fn set_pin(
+    ctx: &mut Context,
+    srk: &Srk,
+    store: &GateStore,
+    new_pin_hash: &[u8; 16],
+) -> Result<GateStore> {
+    let pending = begin_set(ctx, srk, store, new_pin_hash)?;
+    complete(ctx, srk, &pending)
+}
+
+/// Changes the PIN: [`begin_change`] then [`complete`].
+///
+/// # Errors
+/// As [`begin_change`] and [`complete`].
+pub fn change_pin(
+    ctx: &mut Context,
+    srk: &Srk,
+    store: &GateStore,
+    old_pin_hash: &[u8; 16],
+    new_pin_hash: &[u8; 16],
+) -> Result<GateStore> {
+    let pending = begin_change(ctx, srk, store, old_pin_hash, new_pin_hash)?;
+    complete(ctx, srk, &pending)
+}
+
+/// First step of setting the first PIN: checks the bootstrap secret and returns the store
+/// with the new PIN as a pending change. Nothing on the TPM changes. The caller persists the
+/// result, then calls [`complete`].
+///
+/// # Errors
+/// [`Error::Corrupt`] if a PIN is already set or a change is pending; TPM errors otherwise.
+pub fn begin_set(
     ctx: &mut Context,
     srk: &Srk,
     store: &GateStore,
@@ -54,29 +82,17 @@ pub fn set_pin(
         .pin_bootstrap
         .as_ref()
         .ok_or(Error::Corrupt("PIN already set"))?;
-    let salt = *random32()?;
-    let new_auth = derive_auth(new_pin_hash, &salt)?;
-    nvgate::rotate(
-        ctx,
-        srk,
-        store.pin_nv_index,
-        Lockout::Protected,
-        &bootstrap.0,
-        &new_auth,
-    )?;
-    Ok(GateStore {
-        pin_salt: salt,
-        pin_bootstrap: None,
-        ..store.clone()
-    })
+    begin(ctx, srk, store, &bootstrap.0, new_pin_hash)
 }
 
-/// Changes the PIN after the TPM verifies the old one (a wrong `old_pin_hash` counts towards
-/// TPM dictionary-attack lockout and changes nothing).
+/// First step of a PIN change: the TPM verifies the old PIN (a wrong one counts towards
+/// dictionary-attack lockout and changes nothing); returns the store with the new PIN as a
+/// pending change. The caller persists the result, then calls [`complete`].
 ///
 /// # Errors
-/// [`Error::Corrupt`] if no PIN is set; TPM errors (including authorisation failure).
-pub fn change_pin(
+/// [`Error::Corrupt`] if no PIN is set or a change is pending; TPM errors (including
+/// authorisation failure).
+pub fn begin_change(
     ctx: &mut Context,
     srk: &Srk,
     store: &GateStore,
@@ -87,18 +103,53 @@ pub fn change_pin(
         return Err(Error::Corrupt("no PIN set"));
     }
     let old_auth = derive_auth(old_pin_hash, &store.pin_salt)?;
+    begin(ctx, srk, store, &old_auth, new_pin_hash)
+}
+
+fn begin(
+    ctx: &mut Context,
+    srk: &Srk,
+    store: &GateStore,
+    old_auth: &[u8; 32],
+    new_pin_hash: &[u8; 16],
+) -> Result<GateStore> {
+    if store.pending_pin.is_some() {
+        return Err(Error::Corrupt("PIN change already pending"));
+    }
+    nvgate::check(ctx, srk, store.pin_nv_index, old_auth)?;
     let salt = *random32()?;
-    let new_auth = derive_auth(new_pin_hash, &salt)?;
-    nvgate::rotate(
+    let auth = derive_auth(new_pin_hash, &salt)?;
+    Ok(GateStore {
+        pending_pin: Some(PendingPin {
+            salt,
+            auth: AuthValue(auth),
+        }),
+        ..store.clone()
+    })
+}
+
+/// Completes a pending PIN change: (re)defines the PIN NV index with the new secret and
+/// returns the store without the pending change, which the caller must persist. Idempotent,
+/// so it also repairs a change interrupted at any step (HARD-06, AD-011): the new PIN is
+/// then in force. A store without a pending change is returned unchanged.
+///
+/// # Errors
+/// [`Error::Corrupt`] if another index occupies the PIN gate's; TPM errors otherwise.
+pub fn complete(ctx: &mut Context, srk: &Srk, store: &GateStore) -> Result<GateStore> {
+    let Some(pending) = &store.pending_pin else {
+        return Ok(store.clone());
+    };
+    nvgate::redefine(
         ctx,
         srk,
         store.pin_nv_index,
         Lockout::Protected,
-        &old_auth,
-        &new_auth,
+        &pending.auth.0,
     )?;
     Ok(GateStore {
-        pin_salt: salt,
+        pin_salt: pending.salt,
+        pin_bootstrap: None,
+        pending_pin: None,
         ..store.clone()
     })
 }

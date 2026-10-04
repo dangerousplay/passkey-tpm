@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! b"PKTG"  magic
-//! u8       version = 1
+//! u8       version: 1, or 2 while a PIN change is pending
 //! u32      PIN gate NV index (big-endian)
 //! [u8;32]  Argon2id salt
 //! u8       PIN state: 0 = no PIN set yet (followed by [u8;32] bootstrap authValue), 1 = set
@@ -15,7 +15,14 @@
 //! u32      UP gate NV index,  [u8;32] UP gate authValue
 //! [u8;32]  credential-ID MAC key (K_uid)
 //! TPM2B    SRK Name
+//! version 2 only:
+//! [u8;32]  new Argon2id salt, [u8;32] new PIN gate authValue (pending PIN change)
 //! ```
+//!
+//! A PIN change redefines the PIN NV index (AD-011). The broker writes the new values as a
+//! pending change *before* touching the index and clears it afterwards, so a crash at any
+//! point leaves a file from which the change can be completed (HARD-06). Files without a
+//! pending change keep version 1; a reader that doesn't know version 2 fails closed.
 
 use core::fmt;
 
@@ -25,6 +32,8 @@ use crate::reader::{Reader, Truncated};
 
 pub const MAGIC: [u8; 4] = *b"PKTG";
 pub const VERSION: u8 = 1;
+/// Version of a file that carries a [`PendingPin`].
+pub const VERSION_PENDING_PIN: u8 = 2;
 /// Generous upper bound; real files are about 250 bytes.
 pub const MAX_LEN: usize = 1024;
 
@@ -45,6 +54,15 @@ pub struct Gate {
     pub auth: AuthValue,
 }
 
+/// A PIN change persisted before the PIN NV index is redefined with `auth`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingPin {
+    /// Argon2id salt of the new PIN.
+    pub salt: [u8; 32],
+    /// The PIN gate authValue derived from the new PIN.
+    pub auth: AuthValue,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GateStore {
     pub pin_nv_index: u32,
@@ -57,6 +75,8 @@ pub struct GateStore {
     /// Per-user key for credential-ID tags (recognising own credentials before a gesture).
     pub cred_mac_key: AuthValue,
     pub srk_name: Vec<u8>,
+    /// A PIN change that was started but not yet confirmed complete.
+    pub pending_pin: Option<PendingPin>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,7 +122,11 @@ impl GateStore {
     pub fn encode(&self) -> Result<Zeroizing<Vec<u8>>, EncodeError> {
         let mut out = Zeroizing::new(Vec::with_capacity(320));
         out.extend_from_slice(&MAGIC);
-        out.push(VERSION);
+        out.push(if self.pending_pin.is_some() {
+            VERSION_PENDING_PIN
+        } else {
+            VERSION
+        });
         out.extend_from_slice(&self.pin_nv_index.to_be_bytes());
         out.extend_from_slice(&self.pin_salt);
         match &self.pin_bootstrap {
@@ -123,6 +147,10 @@ impl GateStore {
         let len = u16::try_from(self.srk_name.len()).map_err(|_| EncodeError::TooLong)?;
         out.extend_from_slice(&len.to_be_bytes());
         out.extend_from_slice(&self.srk_name);
+        if let Some(pending) = &self.pending_pin {
+            out.extend_from_slice(&pending.salt);
+            out.extend_from_slice(pending.auth.0.as_slice());
+        }
         if out.len() > MAX_LEN {
             return Err(EncodeError::TooLong);
         }
@@ -141,7 +169,8 @@ impl GateStore {
         if r.take(4)? != MAGIC.as_slice() {
             return Err(DecodeError::BadMagic);
         }
-        if r.u8()? != VERSION {
+        let version = r.u8()?;
+        if version != VERSION && version != VERSION_PENDING_PIN {
             return Err(DecodeError::UnknownVersion);
         }
         let pin_nv_index = u32_be(&mut r)?;
@@ -164,6 +193,14 @@ impl GateStore {
         if srk_name.is_empty() {
             return Err(DecodeError::EmptyField);
         }
+        let pending_pin = if version == VERSION_PENDING_PIN {
+            Some(PendingPin {
+                salt: array(r.take(32)?)?,
+                auth: secret(&mut r)?,
+            })
+        } else {
+            None
+        };
         if !r.is_empty() {
             return Err(DecodeError::TrailingBytes);
         }
@@ -175,6 +212,7 @@ impl GateStore {
             up,
             cred_mac_key,
             srk_name,
+            pending_pin,
         })
     }
 }
@@ -218,6 +256,7 @@ mod tests {
             },
             cred_mac_key: secret(0x77),
             srk_name: vec![0, 0x0b, 7, 7, 7],
+            pending_pin: None,
         }
     }
 
@@ -233,6 +272,61 @@ mod tests {
             ..store
         };
         assert_eq!(GateStore::decode(&pin_set.encode().unwrap()), Ok(pin_set));
+    }
+
+    #[test]
+    fn pending_pin_change_round_trips_as_version_2() {
+        let store = GateStore {
+            pending_pin: Some(PendingPin {
+                salt: [5; 32],
+                auth: secret(6),
+            }),
+            ..sample()
+        };
+        let bytes = store.encode().unwrap();
+        assert_eq!(bytes[4], VERSION_PENDING_PIN);
+        assert_eq!(GateStore::decode(&bytes), Ok(store.clone()));
+        // Without the pending change the file is version 1 again, 64 bytes shorter.
+        let done = GateStore {
+            pending_pin: None,
+            ..store
+        };
+        let v1 = done.encode().unwrap();
+        assert_eq!(v1[4], VERSION);
+        assert_eq!(v1.len() + 64, bytes.len());
+        // A version 2 header without the pending section is truncated, and vice versa.
+        let mut short = v1.to_vec();
+        short[4] = VERSION_PENDING_PIN;
+        assert_eq!(GateStore::decode(&short), Err(DecodeError::Truncated));
+        let mut long = bytes.to_vec();
+        long[4] = VERSION;
+        assert_eq!(GateStore::decode(&long), Err(DecodeError::TrailingBytes));
+    }
+
+    #[test]
+    fn version_1_files_still_decode() {
+        // Layout written by releases before the pending-PIN field existed.
+        let mut v1 = Vec::new();
+        v1.extend_from_slice(b"PKTG");
+        v1.push(1);
+        v1.extend_from_slice(&0x0150_0001_u32.to_be_bytes());
+        v1.extend_from_slice(&[9; 32]);
+        v1.push(1);
+        v1.extend_from_slice(&0x0150_0002_u32.to_be_bytes());
+        v1.extend_from_slice(&[3; 32]);
+        v1.extend_from_slice(&0x0150_0003_u32.to_be_bytes());
+        v1.extend_from_slice(&[4; 32]);
+        v1.extend_from_slice(&[0x77; 32]);
+        v1.extend_from_slice(&[0, 5, 0, 0x0b, 7, 7, 7]);
+        let store = GateStore::decode(&v1).unwrap();
+        assert_eq!(
+            store,
+            GateStore {
+                pin_bootstrap: None,
+                ..sample()
+            }
+        );
+        assert_eq!(store.encode().unwrap().as_slice(), v1.as_slice());
     }
 
     #[test]
@@ -268,12 +362,39 @@ mod tests {
         let text = format!("{:?}", sample());
         assert!(text.contains("<redacted>"));
         assert!(!text.contains("[3, 3, 3"));
+        let pending = GateStore {
+            pending_pin: Some(PendingPin {
+                salt: [5; 32],
+                auth: secret(6),
+            }),
+            ..sample()
+        };
+        assert!(!format!("{pending:?}").contains("[6, 6, 6"));
     }
 
     proptest! {
         #[test]
         fn decode_never_panics_on_arbitrary_bytes(bytes in prop::collection::vec(any::<u8>(), 0..600)) {
             let _ = GateStore::decode(&bytes);
+        }
+
+        #[test]
+        fn encode_decode_round_trip(
+            bootstrap in prop::option::of(any::<[u8; 32]>()),
+            pending in prop::option::of((any::<[u8; 32]>(), any::<[u8; 32]>())),
+            srk_name in prop::collection::vec(any::<u8>(), 1..100),
+        ) {
+            let store = GateStore {
+                pin_bootstrap: bootstrap.map(|b| AuthValue(Zeroizing::new(b))),
+                srk_name,
+                pending_pin: pending.map(|(salt, auth)| PendingPin {
+                    salt,
+                    auth: AuthValue(Zeroizing::new(auth)),
+                }),
+                ..sample()
+            };
+            let bytes = store.encode().unwrap();
+            prop_assert_eq!(GateStore::decode(&bytes), Ok(store));
         }
     }
 }

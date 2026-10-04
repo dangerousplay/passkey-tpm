@@ -109,6 +109,10 @@ impl TpmOps for MockTpm {
         salt: &[u8; 32],
     ) -> Result<[u8; 32], TpmError> {
         assert!(gate.is_uv(), "UV always set, so CredRandomWithUV");
+        if blobs.hmac.is_none() {
+            // Like the TPM backend: no hmac-secret keys behaves like a foreign credential.
+            return Err(TpmError::PolicyFailed);
+        }
         Ok(sha256(&[&blobs.key.private, salt]))
     }
     fn change_pin(
@@ -1061,6 +1065,32 @@ fn hmac_secret_outputs_are_zeroized_on_drop() {
     type Output = Result<Zeroizing<Vec<u8>>, u8>;
     let _: fn(&mut A, Uid, &RpIdHash, &Found, &UvEvidence, &HmacRequest) -> Output =
         A::hmac_secret_output;
+}
+
+#[test]
+fn hmac_secret_for_a_credential_without_it_is_omitted() {
+    let mut a = auth();
+    let id = register(&mut a, Vec::new());
+    let p = Platform::new(&mut a, ALICE, Protocol::Two);
+    let salt_enc = p.shared.encrypt(&[1u8; 32]).unwrap();
+    let hmac_in = Value::Map(vec![
+        (int(1), p.key.cose_public()),
+        (int(2), Value::Bytes(salt_enc.clone())),
+        (int(3), Value::Bytes(p.shared.authenticate(&salt_enc))),
+        (int(4), Value::Uint(2)),
+    ]);
+    let ga = req(
+        cmd::GET_ASSERTION,
+        ga_params(
+            Some(vec![descriptor(&id)]),
+            vec![(int(4), Value::Map(vec![(text("hmac-secret"), hmac_in)]))],
+        ),
+    );
+    let step = prep(&mut a, ALICE, &ga);
+    let resp = body(&touch(&mut a, ALICE, step));
+    let auth_data = get(&resp, 2).and_then(Value::as_bytes).unwrap();
+    assert_eq!(auth_data[32] & 0x80, 0, "no ED flag");
+    assert_eq!(auth_data.len(), 37, "no extension output");
 }
 
 // ---------------------------------------------------------------- credMgmt, reset, selection

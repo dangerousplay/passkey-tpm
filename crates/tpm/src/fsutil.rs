@@ -9,10 +9,12 @@ use std::path::Path;
 ///
 /// Writes a temporary file in the same directory, fsyncs it, renames it over `path`, then
 /// fsyncs the directory. Readers see either the old or the new file, never a partial one.
-/// On error the temporary file is removed.
+/// On error the temporary file this call created is removed; a temporary file that already
+/// existed is left alone.
 ///
 /// # Errors
-/// Any I/O error; `path` is left unchanged in that case.
+/// Any I/O error (`AlreadyExists` if the temporary file exists); `path` is left unchanged
+/// unless only the final directory fsync failed.
 pub fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
     let dir = path
         .parent()
@@ -25,21 +27,22 @@ pub fn write_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
     tmp_name.push(format!(".tmp.{}", std::process::id()));
     let tmp = dir.join(tmp_name);
 
-    let result = (|| {
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&tmp)?;
-        file.write_all(contents)?;
-        file.sync_all()?;
-        fs::rename(&tmp, path)?;
-        File::open(dir)?.sync_all()
-    })();
+    // If the temp file already exists (another writer, or a leftover), it isn't ours to
+    // delete: fail without touching it (HARD-19).
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    let result = file
+        .write_all(contents)
+        .and_then(|()| file.sync_all())
+        .and_then(|()| fs::rename(&tmp, path));
     if result.is_err() {
         let _ = fs::remove_file(&tmp);
     }
-    result
+    result?;
+    File::open(dir)?.sync_all()
 }
 
 #[cfg(test)]
@@ -87,6 +90,20 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
             .collect();
         assert!(leftovers.is_empty(), "temp file not cleaned up");
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn existing_temp_file_is_not_deleted() {
+        // HARD-19: another writer's temp file must survive our failed attempt.
+        let dir = scratch("exists");
+        let path = dir.join("gates.v1");
+        let theirs = dir.join(format!(".gates.v1.tmp.{}", std::process::id()));
+        fs::write(&theirs, b"theirs").unwrap();
+        let err = write_atomic(&path, b"new").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&theirs).unwrap(), b"theirs");
+        assert!(!path.exists());
         fs::remove_dir_all(dir).unwrap();
     }
 }
