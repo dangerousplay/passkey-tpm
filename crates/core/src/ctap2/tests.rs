@@ -1054,6 +1054,15 @@ fn hmac_secret_round_trip_and_cred_protect_echo() {
     );
 }
 
+#[test]
+fn hmac_secret_outputs_are_zeroized_on_drop() {
+    use super::state::{Found, HmacRequest};
+    use zeroize::Zeroizing;
+    type Output = Result<Zeroizing<Vec<u8>>, u8>;
+    let _: fn(&mut A, Uid, &RpIdHash, &Found, &UvEvidence, &HmacRequest) -> Output =
+        A::hmac_secret_output;
+}
+
 // ---------------------------------------------------------------- credMgmt, reset, selection
 
 fn cm_token(a: &mut A, p: &Platform) -> [u8; 32] {

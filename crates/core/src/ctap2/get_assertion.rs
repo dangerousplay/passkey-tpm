@@ -14,6 +14,7 @@ use super::state::{Found, HmacRequest, NextAssertion};
 use crate::evidence::{auth_data, UvEvidence};
 use crate::token::PERM_GA;
 use crate::tpm_iface::{RpIdHash, TpmOps, Uid};
+use zeroize::Zeroizing;
 
 /// A validated getAssertion request.
 #[derive(Debug)]
@@ -222,6 +223,27 @@ impl<T: TpmOps> Authenticator<T> {
         Ok(response)
     }
 
+    /// `output1 ‖ output2` of hmac-secret (CTAP 2.1 §12.5), wiped on drop (HARD-17).
+    pub(super) fn hmac_secret_output(
+        &mut self,
+        uid: Uid,
+        rp_id_hash: &RpIdHash,
+        found: &Found,
+        ev: &UvEvidence,
+        h: &HmacRequest,
+    ) -> Parsed<Zeroizing<Vec<u8>>> {
+        let mut out = Zeroizing::new(Vec::with_capacity(64));
+        for salt in core::iter::once(&h.salt1).chain(h.salt2.as_ref()) {
+            let output = Zeroizing::new(
+                self.tpm
+                    .hmac(uid, &found.blobs, rp_id_hash, ev.gate(), salt)
+                    .map_err(map_tpm_error)?,
+            );
+            out.extend_from_slice(output.as_slice());
+        }
+        Ok(out)
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn assertion(
         &mut self,
@@ -236,19 +258,7 @@ impl<T: TpmOps> Authenticator<T> {
         let ext = match hmac {
             None => None,
             Some(h) => {
-                let mut out = self
-                    .tpm
-                    .hmac(uid, &found.blobs, rp_id_hash, ev.gate(), &h.salt1)
-                    .map_err(map_tpm_error)?
-                    .to_vec();
-                if let Some(salt2) = &h.salt2 {
-                    out.extend_from_slice(
-                        &self
-                            .tpm
-                            .hmac(uid, &found.blobs, rp_id_hash, ev.gate(), salt2)
-                            .map_err(map_tpm_error)?,
-                    );
-                }
+                let out = self.hmac_secret_output(uid, rp_id_hash, found, ev, h)?;
                 let enc = h.shared.encrypt(&out).map_err(|_| status::OTHER)?;
                 Some(cbor::encode(&Value::Map(vec![(
                     text("hmac-secret"),

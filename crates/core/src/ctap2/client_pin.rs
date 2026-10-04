@@ -42,7 +42,7 @@ fn random_token() -> Parsed<Zeroizing<[u8; 32]>> {
 }
 
 /// Strips the zero padding of a decrypted 64-byte `paddedNewPin` and applies the PIN policy.
-fn parse_new_pin(padded: &[u8]) -> Parsed<[u8; 16]> {
+fn parse_new_pin(padded: &[u8]) -> Parsed<Zeroizing<[u8; 16]>> {
     if padded.len() != 64 {
         return Err(status::INVALID_PARAMETER);
     }
@@ -61,10 +61,12 @@ fn parse_new_pin(padded: &[u8]) -> Parsed<[u8; 16]> {
     pin_hash(pin)
 }
 
-fn pin_hash(pin: &[u8]) -> Parsed<[u8; 16]> {
-    sha256(&[pin])
+fn pin_hash(pin: &[u8]) -> Parsed<Zeroizing<[u8; 16]>> {
+    let digest = Zeroizing::new(sha256(&[pin]));
+    digest
         .get(..16)
         .and_then(|h| h.try_into().ok())
+        .map(Zeroizing::new)
         .ok_or(status::OTHER)
 }
 
@@ -181,7 +183,7 @@ impl<T: TpmOps> Authenticator<T> {
         uid: Uid,
         shared: &SharedSecret,
         pin_hash_enc: &[u8],
-    ) -> Parsed<[u8; 16]> {
+    ) -> Parsed<Zeroizing<[u8; 16]>> {
         if !self.pin_is_set(uid)? {
             return Err(status::PIN_NOT_SET);
         }
@@ -197,9 +199,10 @@ impl<T: TpmOps> Authenticator<T> {
         let decrypted = shared
             .decrypt(pin_hash_enc)
             .map_err(|_| status::INVALID_PARAMETER)?;
-        let hash: [u8; 16] = decrypted
+        let hash: Zeroizing<[u8; 16]> = decrypted
             .as_slice()
             .try_into()
+            .map(Zeroizing::new)
             .map_err(|_| status::INVALID_PARAMETER)?;
         match self.tpm.verify_pin(uid, &hash) {
             Ok(()) => {
@@ -249,7 +252,7 @@ impl<T: TpmOps> Authenticator<T> {
             .map_err(|_| status::INVALID_PARAMETER)?;
         let new = parse_new_pin(&padded)?;
         self.tpm
-            .change_pin(uid, Some(&old), &new)
+            .change_pin(uid, Some(&*old), &new)
             .map_err(map_tpm_error)?;
         self.user(uid).invalidate_token();
         Ok(ok_empty())
@@ -334,8 +337,9 @@ impl<T: TpmOps> Authenticator<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_new_pin;
-    use super::status;
+    use zeroize::Zeroizing;
+
+    use super::{parse_new_pin, pin_hash, status};
 
     fn padded(pin: &[u8]) -> Vec<u8> {
         let mut p = pin.to_vec();
@@ -371,5 +375,11 @@ mod tests {
             Err(status::PIN_POLICY_VIOLATION),
             "data after padding"
         );
+    }
+
+    #[test]
+    fn pin_hashes_are_zeroized_on_drop() {
+        let hash: Result<Zeroizing<[u8; 16]>, u8> = pin_hash(b"1234");
+        assert_eq!(hash, parse_new_pin(&padded(b"1234")));
     }
 }
