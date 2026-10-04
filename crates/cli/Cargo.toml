@@ -21,5 +21,10 @@ passkey-tpm-uv = { path = "../uv" }
 zbus = { version = "5.19", default-features = false, features = ["tokio"] }
 tokio = { version = "1.53", features = ["rt"] }
 
+[dev-dependencies]
+passkey-tpm-testkit = { path = "../testkit" }
+passkey-tpm-uvd = { path = "../uvd" }
+tokio = { version = "1.53", features = ["rt", "macros", "time"] }
+
 [lints]
 workspace = true

@@ -958,8 +958,10 @@ dependencies = [
 name = "passkey-tpm-cli"
 version = "0.1.0-beta.1"
 dependencies = [
+ "passkey-tpm-testkit",
  "passkey-tpm-tpm",
  "passkey-tpm-uv",
+ "passkey-tpm-uvd",
  "passkey-tpm-wire",
  "tokio",
  "tss-esapi",
