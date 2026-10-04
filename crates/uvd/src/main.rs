@@ -54,6 +54,7 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let watchdog = worker.clone();
     let broker = Broker::new(
         worker,
         conn.clone(),
@@ -66,6 +67,12 @@ async fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
     eprintln!("passkey-tpm-uvd ready");
-    let _ = tokio::signal::ctrl_c().await;
-    ExitCode::SUCCESS
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => ExitCode::SUCCESS,
+        () = watchdog.closed() => {
+            // Every request would now fail with CTAP2_ERR_OTHER; exit so systemd restarts us.
+            eprintln!("TPM worker thread died; exiting");
+            ExitCode::FAILURE
+        }
+    }
 }

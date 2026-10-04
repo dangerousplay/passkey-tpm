@@ -55,6 +55,8 @@ fn now_ms(start: std::time::Instant) -> u64 {
 #[derive(Clone, Debug)]
 pub struct TpmWorker {
     tx: mpsc::Sender<Job>,
+    /// Cancelled when the worker thread ends, however it ends (see [`TpmWorker::closed`]).
+    closed: CancellationToken,
 }
 
 impl TpmWorker {
@@ -68,9 +70,13 @@ impl TpmWorker {
         F: FnOnce() -> T + Send + 'static,
     {
         let (tx, rx) = mpsc::channel::<Job>();
+        let closed = CancellationToken::new();
+        // Dropped when the thread returns or unwinds, which marks the worker closed.
+        let guard = closed.clone().drop_guard();
         std::thread::Builder::new()
             .name("passkey-tpm-tpm".into())
             .spawn(move || {
+                let _guard = guard;
                 let mut auth = Authenticator::new(make());
                 let start = std::time::Instant::now();
                 for job in rx {
@@ -93,7 +99,13 @@ impl TpmWorker {
                     }
                 }
             })?;
-        Ok(Self { tx })
+        Ok(Self { tx, closed })
+    }
+
+    /// Resolves once the worker thread has ended (e.g. it panicked). Every later request
+    /// would fail, so the daemon should exit non-zero and let systemd restart it (HARD-20).
+    pub async fn closed(&self) {
+        self.closed.cancelled().await;
     }
 
     async fn prepare(&self, uid: Uid, info: UserInfo, request: Vec<u8>) -> Option<Step> {
@@ -327,4 +339,34 @@ pub async fn serve(conn: &Connection, broker: Broker) -> zbus::Result<()> {
     conn.object_server().at(OBJECT_PATH, broker).await?;
     conn.request_name(BUS_NAME).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use passkey_tpm_tpm::adapter::TpmBackend;
+
+    use super::TpmWorker;
+
+    #[tokio::test]
+    async fn closed_resolves_when_the_worker_thread_dies() {
+        // HARD-20: e.g. the TPM context can't be created on the worker thread.
+        let (die, wait) = std::sync::mpsc::channel::<()>();
+        let worker = TpmWorker::spawn::<TpmBackend, _>(move || {
+            let _ = wait.recv();
+            panic!("no TPM")
+        })
+        .expect("spawn");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), worker.closed())
+                .await
+                .is_err(),
+            "open while the thread runs"
+        );
+        die.send(()).expect("worker waiting");
+        tokio::time::timeout(Duration::from_secs(5), worker.closed())
+            .await
+            .expect("closed() resolves once the worker is gone");
+    }
 }
