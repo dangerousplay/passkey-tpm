@@ -42,14 +42,32 @@ fn define_gate(ctx: &mut Context, srk: &Srk, index: u32) -> Result<Gate> {
 }
 
 /// Creates a user's gates. The PIN gate gets a random bootstrap secret (no PIN set yet).
+/// If a step fails, the gates this call defined are undefined again (HARD-09).
 ///
 /// # Errors
 /// TPM errors, e.g. if an index is taken or the Owner hierarchy needs a password.
 pub fn provision(ctx: &mut Context, srk: &Srk, indexes: GateIndexes) -> Result<GateStore> {
+    let mut created = Vec::new();
+    let result = define_all(ctx, srk, indexes, &mut created);
+    if result.is_err() {
+        undefine_all(ctx, &created);
+    }
+    result
+}
+
+fn define_all(
+    ctx: &mut Context,
+    srk: &Srk,
+    indexes: GateIndexes,
+    created: &mut Vec<u32>,
+) -> Result<GateStore> {
     let bootstrap = random32()?;
     nvgate::define(ctx, srk, indexes.pin, Lockout::Protected, &bootstrap)?;
+    created.push(indexes.pin);
     let uv = define_gate(ctx, srk, indexes.uv)?;
+    created.push(indexes.uv);
     let up = define_gate(ctx, srk, indexes.up)?;
+    created.push(indexes.up);
     Ok(GateStore {
         pin_nv_index: indexes.pin,
         pin_salt: *random32()?,
@@ -90,4 +108,19 @@ pub fn remove(ctx: &mut Context, store: &GateStore) -> Result<()> {
         nvgate::undefine(ctx, index)?;
     }
     Ok(())
+}
+
+/// Best-effort removal of gates that were just provisioned but could not be persisted.
+pub fn discard(ctx: &mut Context, store: &GateStore) {
+    undefine_all(
+        ctx,
+        &[store.pin_nv_index, store.uv.nv_index, store.up.nv_index],
+    );
+}
+
+/// Undefines `indexes`, ignoring errors: cleanup after an earlier failure.
+fn undefine_all(ctx: &mut Context, indexes: &[u32]) {
+    for &index in indexes {
+        let _ = nvgate::undefine(ctx, index);
+    }
 }

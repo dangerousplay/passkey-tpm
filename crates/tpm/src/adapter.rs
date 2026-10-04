@@ -1,5 +1,5 @@
 //! [`TpmOps`] implementation used by the broker: one TPM context, per-user gate state
-//! provisioned on first use and persisted under the broker's state directory.
+//! provisioned on the first makeCredential or setPIN and persisted under the broker's state directory.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -93,25 +93,22 @@ impl TpmBackend {
         })
     }
 
-    fn load_or_provision(&mut self, uid: Uid) -> Result<()> {
+    /// Loads `uid`'s persisted gate state; `false` if the user has none yet.
+    fn load(&mut self, uid: Uid) -> Result<bool> {
         if self.users.contains_key(&uid.0) {
-            return Ok(());
+            return Ok(true);
         }
-        let srk = self.srk()?;
-        let dir = self.user_dir(uid);
-        let path = dir.join(GATES_FILE);
-        let store = match std::fs::read(&path) {
+        let store = match std::fs::read(self.user_dir(uid).join(GATES_FILE)) {
             Ok(bytes) => GateStore::decode(&bytes).map_err(|_| Error::Corrupt("gates.v1"))?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                create_private_dir(&dir)?;
-                let indexes = self.allocate_nv_indexes()?;
-                let store = gates::provision(&mut self.ctx, &srk, indexes)?;
-                let bytes = store.encode().map_err(|_| Error::Corrupt("gates.v1"))?;
-                fsutil::write_atomic(&path, &bytes)?;
-                store
-            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(e) => return Err(e.into()),
         };
+        self.insert_user(uid, store)?;
+        Ok(true)
+    }
+
+    fn insert_user(&mut self, uid: Uid, store: GateStore) -> Result<()> {
+        let srk = self.srk()?;
         if store.srk_name != srk.name {
             return Err(Error::SrkMismatch);
         }
@@ -120,6 +117,46 @@ impl TpmBackend {
         Ok(())
     }
 
+    /// Provisioning happens only for operations that create state (makeCredential, setPIN),
+    /// never for read-only ones (HARD-09). Gates that can't be persisted are undefined again.
+    fn load_or_provision(&mut self, uid: Uid) -> Result<()> {
+        if self.load(uid)? {
+            return Ok(());
+        }
+        let srk = self.srk()?;
+        let indexes = self.allocate_nv_indexes()?;
+        let store = gates::provision(&mut self.ctx, &srk, indexes)?;
+        let dir = self.user_dir(uid);
+        let persisted = store
+            .encode()
+            .map_err(|_| Error::Corrupt("gates.v1"))
+            .and_then(|bytes| {
+                create_private_dir(&dir)?;
+                Ok(fsutil::write_atomic(&dir.join(GATES_FILE), &bytes)?)
+            });
+        if let Err(e) = persisted {
+            gates::discard(&mut self.ctx, &store);
+            return Err(e);
+        }
+        self.insert_user(uid, store)
+    }
+
+    /// Like [`Self::with_user`] for operations that only read: a user without state gets
+    /// `absent` and nothing is provisioned.
+    fn with_existing_user<T>(
+        &mut self,
+        uid: Uid,
+        absent: std::result::Result<T, TpmError>,
+        f: impl FnOnce(&mut Context, &Srk, &User) -> Result<T>,
+    ) -> std::result::Result<T, TpmError> {
+        match self.load(uid) {
+            Ok(true) => self.with_user(uid, f),
+            Ok(false) => absent,
+            Err(e) => Err(e.to_tpm_error()),
+        }
+    }
+
+    /// Runs `f` with `uid`'s gate state, provisioning it first if needed.
     fn with_user<T>(
         &mut self,
         uid: Uid,
@@ -182,7 +219,7 @@ impl TpmOps for TpmBackend {
         rp: &RpIdHash,
         blobs: &CredBlobs,
     ) -> std::result::Result<Vec<u8>, TpmError> {
-        self.with_user(uid, |_, _, user| {
+        self.with_existing_user(uid, Err(TpmError::Unavailable), |_, _, user| {
             credtag::seal(&user.store.cred_mac_key.0, rp, blobs)
         })
     }
@@ -196,7 +233,7 @@ impl TpmOps for TpmBackend {
         if self.is_revoked(uid, id)? {
             return Ok(None);
         }
-        self.with_user(uid, |_, _, user| {
+        self.with_existing_user(uid, Ok(None), |_, _, user| {
             Ok(credtag::open(&user.store.cred_mac_key.0, rp, id))
         })
     }
@@ -216,7 +253,8 @@ impl TpmOps for TpmBackend {
         gate: GateKind,
         digest: &[u8; 32],
     ) -> std::result::Result<Vec<u8>, TpmError> {
-        self.with_user(uid, |ctx, srk, user| {
+        // No gates: the credential can't be this user's.
+        self.with_existing_user(uid, Err(TpmError::PolicyFailed), |ctx, srk, user| {
             let gates = UserGates {
                 store: &user.store,
                 names: &user.names,
@@ -233,7 +271,7 @@ impl TpmOps for TpmBackend {
         gate: GateKind,
         salt: &[u8; 32],
     ) -> std::result::Result<[u8; 32], TpmError> {
-        self.with_user(uid, |ctx, srk, user| {
+        self.with_existing_user(uid, Err(TpmError::PolicyFailed), |ctx, srk, user| {
             let gates = UserGates {
                 store: &user.store,
                 names: &user.names,
@@ -262,13 +300,16 @@ impl TpmOps for TpmBackend {
     }
 
     fn verify_pin(&mut self, uid: Uid, pin_hash: &[u8; 16]) -> std::result::Result<(), TpmError> {
-        self.with_user(uid, |ctx, srk, user| {
+        // Same outcome as a provisioned user without a PIN (`pin::verify`).
+        self.with_existing_user(uid, Err(TpmError::PolicyFailed), |ctx, srk, user| {
             pin::verify(ctx, srk, &user.store, pin_hash)
         })
     }
 
     fn pin_is_set(&mut self, uid: Uid) -> std::result::Result<bool, TpmError> {
-        self.with_user(uid, |_, _, user| Ok(user.store.pin_bootstrap.is_none()))
+        self.with_existing_user(uid, Ok(false), |_, _, user| {
+            Ok(user.store.pin_bootstrap.is_none())
+        })
     }
 
     fn pin_retries(&mut self, uid: Uid) -> std::result::Result<u8, TpmError> {
@@ -326,7 +367,8 @@ impl TpmOps for TpmBackend {
 
     fn reset_user(&mut self, uid: Uid) -> std::result::Result<(), TpmError> {
         let dir = self.user_dir(uid);
-        let result = self.with_user(uid, |ctx, _, user| gates::remove(ctx, &user.store));
+        let result =
+            self.with_existing_user(uid, Ok(()), |ctx, _, user| gates::remove(ctx, &user.store));
         self.users.remove(&uid.0);
         result?;
         match std::fs::remove_dir_all(&dir) {
