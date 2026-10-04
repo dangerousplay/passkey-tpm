@@ -23,8 +23,9 @@ const MAX_CHANNELS: usize = 16;
 pub enum Effect {
     /// Write these input reports to the device.
     Write(Vec<[u8; REPORT_LEN]>),
-    /// Send this CTAP request to the broker; feed the reply to [`Hid::on_broker_reply`].
-    Broker(Vec<u8>),
+    /// Send this CTAP request to the broker; feed the reply, with the same `id`, to
+    /// [`Hid::on_broker_reply`].
+    Broker { id: u64, request: Vec<u8> },
     /// Ask the broker to cancel the pending fingerprint prompt.
     Cancel,
     /// Show a desktop notification asking for the fingerprint, naming the relying party.
@@ -33,6 +34,7 @@ pub enum Effect {
 
 #[derive(Debug)]
 struct InFlight {
+    id: u64,
     cid: u32,
     keepalive_status: u8,
 }
@@ -43,6 +45,9 @@ pub struct Hid<R: FnMut() -> u32> {
     assembler: Assembler,
     channels: Vec<u32>,
     in_flight: Option<InFlight>,
+    /// Id of the last request sent to the broker, so a late reply to an aborted request
+    /// is never delivered as the answer to a newer one.
+    last_id: u64,
     random_cid: R,
 }
 
@@ -107,6 +112,7 @@ impl<R: FnMut() -> u32> Hid<R> {
             assembler: Assembler::new(),
             channels: Vec::new(),
             in_flight: None,
+            last_id: 0,
             random_cid,
         }
     }
@@ -145,19 +151,30 @@ impl<R: FnMut() -> u32> Hid<R> {
 
     fn on_message(&mut self, cid: u32, cmd: u8, payload: Vec<u8>) -> Vec<Effect> {
         if cmd == CMD_INIT {
+            // CTAP 2.1 §11.2.9.1.3: the broadcast CID allocates a channel; an allocated one
+            // resyncs, abandoning its transaction; any other CID was never handed out.
+            if cid != BROADCAST_CID && !self.channels.contains(&cid) {
+                return vec![error(cid, ERR_INVALID_CHANNEL)];
+            }
             let Ok(nonce) = <[u8; 8]>::try_from(payload.as_slice()) else {
                 return vec![error(cid, ERR_INVALID_LEN)];
             };
+            let mut effects = Vec::new();
             let new_cid = if cid == BROADCAST_CID {
                 self.allocate()
             } else {
+                if self.in_flight.as_ref().is_some_and(|busy| busy.cid == cid) {
+                    self.in_flight = None;
+                    effects.push(Effect::Cancel);
+                }
                 cid
             };
-            return vec![reports(
+            effects.push(reports(
                 cid,
                 CMD_INIT,
                 &init_response(&nonce, new_cid, CAPABILITIES),
-            )];
+            ));
+            return effects;
         }
         if cid == BROADCAST_CID || !self.channels.contains(&cid) {
             return vec![error(cid, ERR_INVALID_CHANNEL)];
@@ -179,7 +196,10 @@ impl<R: FnMut() -> u32> Hid<R> {
                     return vec![error(cid, ERR_INVALID_LEN)];
                 }
                 let prompt = relying_party(&payload);
+                self.last_id = self.last_id.wrapping_add(1);
+                let id = self.last_id;
                 self.in_flight = Some(InFlight {
+                    id,
                     cid,
                     keepalive_status: if prompt.is_some() {
                         STATUS_UPNEEDED
@@ -191,7 +211,10 @@ impl<R: FnMut() -> u32> Hid<R> {
                 if let Some(rp) = prompt {
                     effects.push(Effect::Prompt(rp));
                 }
-                effects.push(Effect::Broker(payload));
+                effects.push(Effect::Broker {
+                    id,
+                    request: payload,
+                });
                 effects
             }
             CMD_ERROR => vec![error(cid, ERR_INVALID_PAR)],
@@ -214,11 +237,15 @@ impl<R: FnMut() -> u32> Hid<R> {
         effects
     }
 
-    /// The broker answered the in-flight request.
-    pub fn on_broker_reply(&mut self, response: &[u8]) -> Vec<Effect> {
+    /// The broker answered request `id`. Dropped unless that request is still in flight
+    /// (it may have been aborted by INIT or [`Hid::reset`]).
+    pub fn on_broker_reply(&mut self, id: u64, response: &[u8]) -> Vec<Effect> {
         match self.in_flight.take() {
-            Some(busy) => vec![reports(busy.cid, CMD_CBOR, response)],
-            None => Vec::new(),
+            Some(busy) if busy.id == id => vec![reports(busy.cid, CMD_CBOR, response)],
+            other => {
+                self.in_flight = other;
+                Vec::new()
+            }
         }
     }
 
@@ -317,7 +344,13 @@ mod tests {
         let effects = h.on_output(&init_packet(cid, CMD_CBOR, &req), 0);
         assert_eq!(
             effects,
-            vec![Effect::Prompt("example.com".into()), Effect::Broker(req)]
+            vec![
+                Effect::Prompt("example.com".into()),
+                Effect::Broker {
+                    id: 1,
+                    request: req
+                }
+            ]
         );
         assert!(h.is_busy());
         assert_eq!(
@@ -334,7 +367,7 @@ mod tests {
             vec![Effect::Cancel]
         );
         assert_eq!(
-            h.on_broker_reply(&[0x2d]),
+            h.on_broker_reply(1, &[0x2d]),
             vec![reports(cid, CMD_CBOR, &[0x2d])]
         );
         assert!(!h.is_busy());
@@ -355,7 +388,7 @@ mod tests {
         assert_eq!(h.reset(), vec![Effect::Cancel]);
         assert!(!h.is_busy());
         // A late broker reply goes nowhere, and the old channel is gone.
-        assert!(h.on_broker_reply(&[0x00]).is_empty());
+        assert!(h.on_broker_reply(1, &[0x00]).is_empty());
         assert!(h.on_tick(100).is_empty());
         assert_eq!(
             h.on_output(&init_packet(cid, CMD_PING, b"x"), 200),
@@ -365,12 +398,73 @@ mod tests {
     }
 
     #[test]
+    fn init_on_the_busy_channel_aborts_its_request() {
+        let mut h = hid();
+        let cid = open_channel(&mut h);
+        let nonce = [9, 8, 7, 6, 5, 4, 3, 2];
+        h.on_output(&init_packet(cid, CMD_CBOR, &[0x04]), 0);
+        assert!(h.is_busy());
+        assert_eq!(
+            h.on_output(&init_packet(cid, CMD_INIT, &nonce), 10),
+            vec![
+                Effect::Cancel,
+                reports(cid, CMD_INIT, &init_response(&nonce, cid, CAPABILITIES))
+            ]
+        );
+        assert!(!h.is_busy());
+        assert!(
+            h.on_tick(100).is_empty(),
+            "no keepalive for the aborted request"
+        );
+        // A new request on the resynced channel never gets the aborted one's late reply.
+        assert_eq!(
+            h.on_output(&init_packet(cid, CMD_CBOR, &[0x04]), 200),
+            vec![Effect::Broker {
+                id: 2,
+                request: vec![0x04]
+            }]
+        );
+        assert!(h.on_broker_reply(1, &[0x2d]).is_empty());
+        assert!(h.is_busy());
+        assert_eq!(
+            h.on_broker_reply(2, &[0x00]),
+            vec![reports(cid, CMD_CBOR, &[0x00])]
+        );
+    }
+
+    #[test]
+    fn init_on_an_unallocated_channel_is_rejected() {
+        let mut h = hid();
+        let nonce = [1; 8];
+        assert_eq!(
+            h.on_output(&init_packet(0xdead_beef, CMD_INIT, &nonce), 0),
+            vec![error(0xdead_beef, ERR_INVALID_CHANNEL)]
+        );
+        // An allocated channel resyncs without touching another channel's request.
+        let busy = open_channel(&mut h);
+        let idle = open_channel(&mut h);
+        h.on_output(&init_packet(busy, CMD_CBOR, &[0x04]), 0);
+        assert_eq!(
+            h.on_output(&init_packet(idle, CMD_INIT, &nonce), 10),
+            vec![reports(
+                idle,
+                CMD_INIT,
+                &init_response(&nonce, idle, CAPABILITIES)
+            )]
+        );
+        assert!(h.is_busy());
+    }
+
+    #[test]
     fn get_info_uses_processing_keepalive_and_no_prompt() {
         let mut h = hid();
         let cid = open_channel(&mut h);
         assert_eq!(
             h.on_output(&init_packet(cid, CMD_CBOR, &[0x04]), 0),
-            vec![Effect::Broker(vec![0x04])]
+            vec![Effect::Broker {
+                id: 1,
+                request: vec![0x04]
+            }]
         );
         assert_eq!(
             h.on_tick(100),

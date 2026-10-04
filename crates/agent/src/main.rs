@@ -28,7 +28,7 @@ const SEAT_POLL: Duration = Duration::from_secs(2);
 
 enum Input {
     Output(Vec<u8>),
-    Reply(Vec<u8>),
+    Reply(u64, Vec<u8>),
     DeviceGone,
     /// Whether this user is in the foreground on a seat (sent on every check).
     Seat(bool),
@@ -165,7 +165,7 @@ fn apply(
                     }
                 }
             }
-            Effect::Broker(request) => {
+            Effect::Broker { id, request } => {
                 let bus = bus.clone();
                 let tx = tx.clone();
                 tokio::spawn(async move {
@@ -178,7 +178,7 @@ fn apply(
                             }
                             Err(_) => vec![STATUS_OTHER],
                         };
-                    let _ = tx.send(Input::Reply(response));
+                    let _ = tx.send(Input::Reply(id, response));
                 });
             }
             Effect::Cancel => {
@@ -230,7 +230,7 @@ async fn main() -> ExitCode {
             input = rx.recv() => match input {
                 Some(Input::Output(data)) if present => apply(hid.on_output(&data, now_ms()), link, &bus, &tx),
                 Some(Input::Output(_)) => {}
-                Some(Input::Reply(response)) => apply(hid.on_broker_reply(&response), link, &bus, &tx),
+                Some(Input::Reply(id, response)) => apply(hid.on_broker_reply(id, &response), link, &bus, &tx),
                 Some(Input::Seat(true)) if !present => {
                     let result = match &writer {
                         Some(w) => w.recreate(&params),
