@@ -1,7 +1,7 @@
 # State
 
 **Last Updated:** 2026-10-04
-**Current Work:** Beta `v0.1.0-beta.1` prepared on branch `release/v0.1.0-beta.1` (Sigstore-signed packages, dependency upgrade; not pushed). Next: security-hardening P1 (HARD-01..04, `.specs/features/security-hardening/`), then tag the beta (`.specs/features/beta-release/` B6–B12), then extract the CTAP crates (`.specs/features/ctap-crates/`, starts with Discuss C-G1..C-G5).
+**Current Work:** Branch `release/v0.1.0-beta.1` (not pushed): Sigstore-signed packages, dependency upgrade, and security-hardening P1 (HARD-01..04) done and verified. Next: push + fork rehearsal + tag the beta (`.specs/features/beta-release/` B6–B12); hardening phases 2–3 (G2–G4 open); then the CTAP crates (`.specs/features/ctap-crates/`, Discuss C-G1..C-G5).
 
 ---
 
@@ -137,6 +137,13 @@
 **Reason:** Security fixes land on the latest line; RustCrypto 0.10/0.12 is in maintenance.
 **Impact:** `pin_protocol` uses cipher 0.5 block-mode traits, hybrid-array keys and `ToSec1Point`; `KeyInit::new_from_slice` for HMAC.
 
+### AD-020: The authenticator serves only the user in front of a seat (2026-10-04)
+
+**Decision:** uvd refuses `Ctap` calls (`OPERATION_DENIED`) from uids that have no active session on a seat (logind, by uid, fail closed). The agent removes its uhid device while its user is in the background and re-creates it on return. Details and residual risks: `.specs/features/security-hardening/context.md` G1.
+**Reason:** the hidraw node's `uaccess` ACL follows the seat user, so after a fast user switch, another user could drive the background user's agent (HARD-01). Destroying the device also invalidates descriptors opened before the switch.
+**Trade-off:** no use from seatless sessions (SSH); requires logind.
+**Impact:** `passkey_tpm_uv::seat`; `Broker::new` takes a `SessionPolicy`; VM scenarios log users in on VTs and switch with `chvt`.
+
 ---
 
 ## Active Blockers
@@ -164,12 +171,9 @@
 **Workaround:** None yet.
 **Resolution:** Investigate making `vstd` optional, with ghost code erased via a cfg (`verus_only`) and exec code compiled without the macro. Otherwise package `vstd` for Debian. Decide before M3. Spike scheduled as ctap-crates A1 (also required for publishing).
 
-### B-004: Beta tag gated on security-hardening P1
+### B-004: Beta tag gated on security-hardening P1 — RESOLVED (2026-10-04)
 
-**Discovered:** 2026-10-04 (internal code review)
-**Impact:** High. The cross-user session issue (HARD-01) and fprintd activation (HARD-02) make the beta unsafe on shared machines / possibly unusable with fingerprints.
-**Workaround:** None; the branch `release/v0.1.0-beta.1` waits.
-**Resolution:** HARD-01..04 Verified (`.specs/features/security-hardening/` H1–H7), then beta-release B9–B12.
+**Resolution:** HARD-01..04 fixed and Verified (226 tests, Verus 103/0, VM 41/41). Beta-release B6 onwards can proceed.
 
 ---
 

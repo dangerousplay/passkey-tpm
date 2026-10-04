@@ -3,9 +3,23 @@
 **Spec:** `.specs/features/security-hardening/spec.md`
 **Design:** inline per task (fixes are local); G1–G4 decisions go to `context.md` in this folder
 **Testing:** `.specs/codebase/TESTING.md`
-**Status:** Draft
+**Status:** Phase 1 done (2026-10-04); phases 2–3 pending
 
 Rule for every task: re-confirm the finding by writing the failing regression test first. If the test passes on unmodified code, mark the requirement "Not reproducible" with the evidence and skip the fix.
+
+## Results
+
+| Task | Status | Commit | Notes |
+|---|---|---|---|
+| H1 | ✅ | ecc2496, 61dcb13 | activation only when unowned (dbus-daemon 1.16 `ServiceUnknown` on owned names without .service); 2 activation tests reproduced the bug first; uvd keeps `uv=false` on fprintd errors (logged) |
+| H2 | ✅ | 8ad6255 | `check_pin` restores the counter on non-`WrongPin` errors; test reproduced 3→2 on lockout |
+| H3 | ✅ | fa0495d | `check_builtin_uv` / `check_pin_not_blocked` shared with the token path; PIN-UV + fingerprint-presence checks PIN block only (context.md) |
+| H4 | ✅ | this commit | G1 = both checks, fail closed (context.md, AD-020) |
+| H5 | ✅ | 1821259 | `passkey_tpm_uv::seat::Logind` (by uid; seatless sessions don't count); broker test + mock-logind tests |
+| H6 | ✅ | 8f47348 | agent removes/re-creates the device on one `/dev/uhid` handle (`UhidWriter::remove_device`/`recreate`); `Hid::reset` cancels in-flight work; device `HID_PHYS` carries the uid |
+| H7 | ✅ | 63a2cf8 | VM: autologin gettys on VT 2/3 + `chvt`; 41/41 scenarios green (needs `kbd` in the image) |
+
+Gate after phase 1: `cargo xtask ci` green, 226 tests (217 before), Verus 103 verified / 0 errors.
 
 ## Execution Plan
 

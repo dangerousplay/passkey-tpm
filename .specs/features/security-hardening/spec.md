@@ -1,7 +1,7 @@
 # Security Hardening (code review 2026-10-04) — Specification
 
 **Size:** Large (multi-component: agent, broker, core, tpm, packaging)
-**Status:** Specified. Gray areas G1–G4 need a decision before their tasks start.
+**Status:** P1 done (HARD-01..04 Verified 2026-10-04); G1 decided (context.md). G2–G4 open for phases 2–3.
 **Source:** read-only code review of `main` @ a81da2f, 2026-10-04. The two High findings (F1 session isolation, F3 fprintd activation) were re-checked against the code; the rest must be re-confirmed at the start of their task (write the failing test first).
 
 ## Problem Statement
@@ -27,7 +27,7 @@ The review found a cross-user path on multi-seat / fast-user-switching machines,
 
 | ID | Question | Options | Recommendation |
 |---|---|---|---|
-| G1 | How is the agent's device bound to an active session? | (a) agent watches logind `Session.Active` and destroys/recreates the uhid device; (b) uvd checks via logind that the caller's session is active on its seat; (c) both | (c): (a) closes the device-ACL hand-over, (b) is the enforcement point the agent can't skip |
+| G1 ✅ (both, AD-020) | How is the agent's device bound to an active session? | (a) agent watches logind `Session.Active` and destroys/recreates the uhid device; (b) uvd checks via logind that the caller's session is active on its seat; (c) both | (c): (a) closes the device-ACL hand-over, (b) is the enforcement point the agent can't skip |
 | G2 | Silent `up=false` probes (AD-012) | keep `UNSUPPORTED_OPTION` when a credential exists, or always `NO_CREDENTIALS` without UV (§6.2.2 step 7 for credProtect=3) | always `NO_CREDENTIALS` without UV; amend AD-012 |
 | G3 | authenticatorReset timing (§6.6 "within 10 s of power-up") | 10 s after agent start; 10 s after device (re)creation; CLI-only reset | 10 s after device creation + CLI `passkey-tpm reset` for later |
 | G4 | `/dev/uhid` access | keep `uaccess` (document risk); privileged helper that only creates the FIDO descriptor and passes the fd; uvd creates the device per active session | helper, M3; document risk in beta notes |
@@ -110,10 +110,10 @@ The review found a cross-user path on multi-seat / fast-user-switching machines,
 
 | ID | Story | Prio | Finding | Phase | Status |
 |---|---|---|---|---|---|
-| HARD-01 | Cross-user isolation | P1 | F1 | Tasks (G1) | Pending |
-| HARD-02 | fprintd activation | P1 | F3 | Tasks | Pending |
-| HARD-03 | Retry restore on non-PIN errors | P1 | F4 | Tasks | Pending |
-| HARD-04 | UV/PIN-blocked in gesture path | P1 | F6 | Tasks | Pending |
+| HARD-01 | Cross-user isolation | P1 | F1 | Execute | Verified (VM: 4 isolation scenarios) |
+| HARD-02 | fprintd activation | P1 | F3 | Execute | Verified (integration-dbus) |
+| HARD-03 | Retry restore on non-PIN errors | P1 | F4 | Execute | Verified (unit + Verus) |
+| HARD-04 | UV/PIN-blocked in gesture path | P1 | F6 | Execute | Verified (unit + Verus) |
 | HARD-05 | DA budget across reset | P2 | F5 | Tasks | Pending |
 | HARD-06 | Crash-safe PIN rotation | P2 | F7 | Tasks | Pending |
 | HARD-07 | up=false probe oracle | P2 | F8 | Tasks (G2) | Pending |

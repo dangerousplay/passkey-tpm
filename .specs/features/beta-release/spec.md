@@ -70,7 +70,7 @@ There is no installable build yet. Testers need `.deb`, `.rpm` and Arch packages
 | REL-03 | Signed beta packages | Execute | Implemented — needs a real tag run |
 | REL-04 | Signed beta packages | Execute | Verified (local tag snapshot + `vercmp`) |
 | REL-05 | Signed beta packages | Execute | Verified |
-| REL-06 | Gated beta | Tasks | Pending (blocked on HARD-01..04) |
+| REL-06 | Gated beta | Tasks | Ready (HARD-01..04 Verified 2026-10-04) |
 | REL-07 | Gated beta | Tasks | Pending |
 
 **Coverage:** 7 total, 7 mapped to tasks, 0 unmapped
