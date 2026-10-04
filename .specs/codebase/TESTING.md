@@ -13,6 +13,7 @@
 | integration-tpm | swtpm, one instance per test (socket TCTI) | `crates/passkey-tpm-tpm/tests/` |
 | integration-dbus | private `dbus-daemon --session` per test | `crates/passkey-tpm-uvd/tests/` |
 | hardware | real TPM / fprintd, `#[ignore]` + feature flag | run manually, results in `docs/compat.md` |
+| vm-e2e | pytest + pytest-testinfra in an mkosi VM (swtpm, libfprint virtual device), deps locked with uv | `tests/vm/e2e/`; `cargo xtask vm`; JUnit + HTML in `target/vm/report/`; nightly CI |
 
 ## Coverage matrix
 

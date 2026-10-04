@@ -112,6 +112,12 @@ Each MVP is a usable, demoable cut of a milestone. Later milestones harden and w
 
 ## M3 — Distribution
 
+**VM test bed** - IN PROGRESS (AD-014): Ubuntu 24.04 green — 38 scenarios (packaging/testinfra, real fprintd + virtual sensor, libfprint, libfido2, CTAP 2.1 suite, wrong finger, two-user isolation with broker audit, encrypted sessions, DA policy warnings)
+
+- mkosi images (Ubuntu 24.04 first) with swtpm and libfprint's virtual fingerprint device; `cargo xtask vm`; nightly CI
+- Scenarios: package install, real fprintd + polkit, encrypted sessions (discrete-like TPM), SRK variants, two users, wrong-PIN/DA, browsers over uhid, pam_u2f, systemd-cryptenroll
+
+
 **Goal:** Installable from official or near-official channels.
 
 ### Features

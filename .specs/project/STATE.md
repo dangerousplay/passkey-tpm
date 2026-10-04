@@ -1,7 +1,7 @@
 # State
 
 **Last Updated:** 2026-10-03
-**Current Work:** MVP-3 packaging — `cargo xtask dist` + Arch/Fedora/Debian recipes written; next: clean-chroot builds (makepkg/mock/sbuild), real-fprintd E2E, signed commits.
+**Current Work:** VM test bed green on Ubuntu 24.04 (38 pytest scenarios, real fprintd via libfprint's virtual device, swtpm); next: more scenarios (browser over uhid, pam_u2f, cryptenroll, SRK variants) and the distro matrix.
 
 ---
 
@@ -97,6 +97,19 @@
 **Trade-off:** The PIN no longer cryptographically binds credentials on its own. A broker compromise exposes the UV gate secret either way, so the security against T1–T5 is unchanged (threat model updated). Firmware TPMs carry authValues in clear inside the SoC (no external bus).
 **Impact:** gates.v1 holds three NV gates; `nvgate` replaces `pin_gate`; `TpmOps::verify_pin`/`pin_is_set` added.
 
+### AD-014: VM test bed = mkosi + QEMU/KVM + swtpm + libfprint virtual driver (2026-10-03)
+
+**Decision:** Scenarios that can't run on a developer machine (real fprintd + polkit + D-Bus activation, package install, systemd hardening, discrete-TPM encrypted sessions, SRK variants, two-user isolation, wrong-PIN/DA tests, browsers over uhid, pam_u2f, systemd-cryptenroll) run in mkosi-built VMs. Each VM gets a throwaway swtpm TPM (`QemuSwtpm=`), and fprintd uses libfprint's virtual device driver so the harness can "touch" the sensor. `cargo xtask vm` drives it locally and in a nightly CI job. First target: **Ubuntu 24.04 (noble)**; other distros follow as mkosi profiles.
+**Reason:** One config builds images for every target distro; systemd uses mkosi in its own CI; it boots with a TPM out of the box and runs the same way locally and on GitHub runners (KVM). Vagrant (vagrant-libvirt `tpm_*` options, or VirtualBox 7) stays an optional local path: slower, awkward in CI, one distro per box.
+**Trade-off:** Image builds need network access and minutes, so this runs in the slow tier, never in the fast gates (AD-006, the fast-validation preference).
+**Impact:** `tests/vm/` mkosi config; `cargo xtask vm`; nightly workflow job.
+
+### AD-015: Portability policy for FreeBSD/NetBSD (2026-10-03)
+
+**Decision:** Linux remains the only supported platform. `passkey-tpm-core` and `passkey-tpm-wire` must stay OS-independent; `cargo xtask portability` (part of the fast gates) checks them for `x86_64-unknown-freebsd`. OS-specific pieces (uhid, systemd, udev, fprintd, the kernel TPM resource manager) stay behind the existing traits.
+**Reason:** The verified CTAP core is the most reusable asset and ports for free. The blocker on BSD is the transport: there is no userspace HID-device creation like Linux uhid (CUSE on FreeBSD is unverified). FreeBSD also has no in-kernel TPM resource manager (tpm2-abrmd needed); NetBSD's TPM 2.0 and tpm2-tss support are uncertain. BSD desktop users are a small share of the audience.
+**Impact:** One extra fast CI step (a few seconds). A BSD port is a deferred idea.
+
 ---
 
 ## Active Blockers
@@ -175,6 +188,22 @@
 **Solution:** The harness traps EXIT/INT/TERM/HUP; `passkey-tpm-cli tpm status` lists our NV indexes; orphans were verified against our exact template before deletion; the allocation range is narrowed to 0x01500000–0x0150FFFF.
 **Prevents:** Leaking NV space on users' TPMs and touching other software's indexes.
 
+### L-008: The VM test bed found three packaging bugs no host test could see
+
+**Context:** First runs of the Ubuntu 24.04 mkosi VM (AD-014).
+**Problems:**
+1. `uhid` wasn't loaded on a fresh system, and the package shipped no `modules-load.d` entry (the Go version had one).
+2. `xtask dist` copied binaries from `<workspace>/target` and ignored `CARGO_TARGET_DIR`, so the image silently got stale binaries built on the host.
+3. libfido2 CLI flags differ across versions (`-t uv=true` is 1.15+; `-v` prompts for a PIN on assertions).
+**Solution:** Ship `/usr/lib/modules-load.d/passkey-tpm.conf`; `dist` resolves built artefacts through Cargo's target dir (unit-tested); the libfido2 checks rely on `-V -v` (UV bit in signed data) instead of version-specific request flags.
+**Prevents:** Broken installs and false-positive tests.
+
+### L-009: Shell-based multi-process test harnesses lie; use a real test framework
+
+**Context:** The bash runner's two-user test killed a `runuser`/subshell wrapper instead of alice's agent, so bob was routed through alice's device and the test reported a cross-user leak that wasn't there.
+**Solution:** pytest + pytest-testinfra (`tests/vm/e2e`, dependencies locked with uv): agents started with `subprocess.Popen(user=...)` (real PIDs), devices identified by diffing hidraw nodes, tests open a specific agent's device, and the broker's `request uid=` audit line proves which user each request ran as. JUnit + HTML reports come back over virtiofs.
+**Prevents:** False security findings, and missed ones.
+
 ---
 
 ## Quick Tasks Completed
@@ -187,6 +216,7 @@
 ## Deferred Ideas
 
 - [ ] TPM-less software fallback keystore — Captured during: init
+- [ ] FreeBSD/NetBSD port: transport (CUSE-based hidraw? libfido2-level integration? xdg-desktop-portal), tpm2-abrmd on FreeBSD, NetBSD TPM 2.0 support, rc.d/devd/pkgsrc packaging; publish core/wire as standalone crates for other authenticators — Captured during: portability review (AD-015)
 - [ ] Native PAM module with authd/SSSD broker re-validation — Captured during: init
 - [ ] Face UV provider once a production-grade stack exists (Howdy 3 still beta) — Captured during: init
 - [ ] Upstream the verified CTAPHID/CBOR crates to credentialsd/libwebauthn — Captured during: init
