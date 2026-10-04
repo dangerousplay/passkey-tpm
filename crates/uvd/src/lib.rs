@@ -218,9 +218,19 @@ impl Broker {
         }
         let username = self.users.username(uid);
         let uv_enrolled = match &username {
-            Some(name) => fprintd::has_enrolled(&self.fprintd, name)
-                .await
-                .unwrap_or(false),
+            Some(name) => match fprintd::has_enrolled(&self.fprintd, name).await {
+                Ok(enrolled) => enrolled,
+                // fprintd can't be started or reached: UV is unavailable, which is not the
+                // same as "no fingerprints". Let a UV request reach `fprintd::verify`, which
+                // retries and ends in `UvOutcome::Unavailable` if fprintd is still down.
+                Err(e) => {
+                    #[allow(clippy::print_stderr)]
+                    {
+                        eprintln!("fprintd unavailable for uid={uid}: {e}");
+                    }
+                    true
+                }
+            },
             None => false,
         };
         let info = UserInfo { uv_enrolled };

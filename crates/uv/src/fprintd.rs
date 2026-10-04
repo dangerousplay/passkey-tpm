@@ -148,6 +148,19 @@ where
     .await
 }
 
+/// Asks the bus to D-Bus-activate fprintd.
+async fn start_service(conn: &Connection) -> zbus::Result<()> {
+    conn.call_method(
+        Some("org.freedesktop.DBus"),
+        "/org/freedesktop/DBus",
+        Some("org.freedesktop.DBus"),
+        "StartServiceByName",
+        &(SERVICE, 0u32),
+    )
+    .await?;
+    Ok(())
+}
+
 /// Resolves the unique name currently owning [`SERVICE`].
 async fn name_owner(conn: &Connection) -> zbus::Result<String> {
     let reply = conn
@@ -160,6 +173,23 @@ async fn name_owner(conn: &Connection) -> zbus::Result<String> {
         )
         .await?;
     reply.body().deserialize::<String>()
+}
+
+/// Resolves the owner of [`SERVICE`], starting fprintd first if nobody owns the name.
+///
+/// fprintd is D-Bus activated and exits when idle, and `GetNameOwner` doesn't activate it.
+/// Activation is only tried when the name has no owner: the bus refuses `StartServiceByName`
+/// for a name without a `.service` file even while it is owned.
+async fn resolve_owner(conn: &Connection) -> Result<String, String> {
+    if let Ok(owner) = name_owner(conn).await {
+        return Ok(owner);
+    }
+    start_service(conn)
+        .await
+        .map_err(|e| format!("StartServiceByName: {e}"))?;
+    name_owner(conn)
+        .await
+        .map_err(|e| format!("GetNameOwner: {e}"))
 }
 
 /// Asks the manager (at the given owner) for the default device path.
@@ -182,8 +212,8 @@ fn unavailable(step: &str, err: &zbus::Error) -> UvResult {
 
 /// Verifies a fingerprint for `username` on fprintd's default device.
 ///
-/// Sequence: `GetNameOwner(net.reactivated.Fprint)`, `GetDefaultDevice`, `Claim(username)`,
-/// subscribe to `VerifyStatus`, `VerifyStart("any")`, then wait for a final status.
+/// Sequence: `GetNameOwner(net.reactivated.Fprint)` (after `StartServiceByName` if it has no
+/// owner), `GetDefaultDevice`, `Claim(username)`, subscribe to `VerifyStatus`, `VerifyStart("any")`, then wait for a final status.
 /// `VerifyStop` (if started) and `Release` (if claimed) are always sent before returning,
 /// including on cancel, timeout and errors.
 ///
@@ -217,9 +247,9 @@ async fn run_bounded(
 }
 
 async fn run(conn: &Connection, username: &str, session: &mut Session) -> UvResult {
-    let owner = match name_owner(conn).await {
+    let owner = match resolve_owner(conn).await {
         Ok(o) => o,
-        Err(e) => return unavailable("GetNameOwner", &e),
+        Err(e) => return UvResult::Unavailable(e),
     };
     session.owner = Some(owner.clone());
 
@@ -282,12 +312,11 @@ async fn subscribe(
 ///
 /// # Errors
 ///
-/// Returns a description if fprintd can't be reached or reports an error other than
-/// `NoEnrolledPrints` (which maps to `Ok(false)`).
+/// Returns a description if fprintd can't be started or reached, or reports an error other
+/// than `NoEnrolledPrints` (which maps to `Ok(false)`). An error means UV is unavailable, not
+/// that the user has no fingerprints.
 pub async fn has_enrolled(conn: &Connection, username: &str) -> Result<bool, String> {
-    let owner = name_owner(conn)
-        .await
-        .map_err(|e| format!("GetNameOwner: {e}"))?;
+    let owner = resolve_owner(conn).await?;
     let device = default_device(conn, &owner)
         .await
         .map_err(|e| format!("GetDefaultDevice: {e}"))?;
@@ -312,15 +341,9 @@ pub async fn has_enrolled(conn: &Connection, username: &str) -> Result<bool, Str
 /// Returns a description if fprintd can't be reached or has no device.
 pub async fn device_description(conn: &Connection) -> Result<String, String> {
     // fprintd is D-Bus activated and exits when idle; start it like fprintd-list does.
-    conn.call_method(
-        Some("org.freedesktop.DBus"),
-        "/org/freedesktop/DBus",
-        Some("org.freedesktop.DBus"),
-        "StartServiceByName",
-        &(SERVICE, 0u32),
-    )
-    .await
-    .map_err(|e| format!("fprintd is not installed or can't start: {e}"))?;
+    start_service(conn)
+        .await
+        .map_err(|e| format!("fprintd is not installed or can't start: {e}"))?;
     let owner = name_owner(conn)
         .await
         .map_err(|e| format!("GetNameOwner: {e}"))?;

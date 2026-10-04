@@ -1,7 +1,7 @@
 //! fprintd client tests against the mock fprintd on a private `dbus-daemon` per test.
 
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
@@ -20,17 +20,30 @@ struct PrivateBus {
     address: String,
 }
 
+fn temp_path(kind: &str) -> PathBuf {
+    static N: AtomicU32 = AtomicU32::new(0);
+    std::env::temp_dir().join(format!(
+        "passkey-tpm-uv-{kind}-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ))
+}
+
 impl PrivateBus {
     fn start() -> Self {
-        static N: AtomicU32 = AtomicU32::new(0);
-        let config = std::env::temp_dir().join(format!(
-            "passkey-tpm-uv-bus-{}-{}.conf",
-            std::process::id(),
-            N.fetch_add(1, Ordering::Relaxed)
-        ));
+        Self::start_with_services(None)
+    }
+
+    /// Starts a bus that D-Bus-activates the `.service` files in `services`, if given.
+    fn start_with_services(services: Option<&Path>) -> Self {
+        let config = temp_path("bus").with_extension("conf");
+        let servicedir = services
+            .map(|dir| format!("<servicedir>{}</servicedir>", dir.display()))
+            .unwrap_or_default();
         std::fs::write(
             &config,
-            r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
+            format!(
+                r#"<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
 <busconfig>
   <type>session</type>
@@ -41,8 +54,10 @@ impl PrivateBus {
     <allow eavesdrop="true"/>
     <allow own="*"/>
   </policy>
+  {servicedir}
 </busconfig>
-"#,
+"#
+            ),
         )
         .unwrap();
         let mut child = Command::new("dbus-daemon")
@@ -248,17 +263,24 @@ async fn has_enrolled_true() {
 async fn no_fprintd_is_unavailable() {
     let bus = PrivateBus::start();
     let client = bus.connect().await;
-    assert!(matches!(
-        fprintd::verify(
-            &client,
-            USER,
-            Duration::from_secs(5),
-            CancellationToken::new()
-        )
-        .await,
-        UvResult::Unavailable(_)
-    ));
-    assert!(fprintd::has_enrolled(&client, USER).await.is_err());
+    // No service file: activation fails, which is "unavailable", never "not enrolled".
+    let r = fprintd::verify(
+        &client,
+        USER,
+        Duration::from_secs(5),
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(
+        matches!(&r, UvResult::Unavailable(e) if e.starts_with("StartServiceByName: ")),
+        "{r:?}"
+    );
+    let r = fprintd::has_enrolled(&client, USER).await;
+    assert!(
+        r.as_ref()
+            .is_err_and(|e| e.starts_with("StartServiceByName: ")),
+        "{r:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -351,4 +373,88 @@ async fn spoofed_match_does_not_override_real_no_match() {
     assert_eq!(verify(&f, Duration::from_secs(5)).await, UvResult::NoMatch);
     task.await.unwrap();
     assert_cleaned_up(&f);
+}
+
+/// A services directory with an activatable `net.reactivated.Fprint` that runs the
+/// `mock-fprintd` example, removed on drop.
+struct ActivatableFprintd {
+    dir: PathBuf,
+}
+
+impl ActivatableFprintd {
+    fn new() -> Self {
+        // Test binaries live in target/<profile>/deps, examples in target/<profile>/examples.
+        let exe = std::env::current_exe().unwrap();
+        let mock = exe
+            .parent()
+            .and_then(Path::parent)
+            .unwrap()
+            .join("examples")
+            .join("mock-fprintd");
+        assert!(
+            mock.exists(),
+            "{} missing: run the workspace tests so cargo builds the example",
+            mock.display()
+        );
+        let dir = temp_path("services");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{}.service", fprintd::SERVICE)),
+            format!(
+                "[D-BUS Service]\nName={}\nExec=/usr/bin/env MOCK_FPRINTD_DELAY_MS=20 {}\n",
+                fprintd::SERVICE,
+                mock.display()
+            ),
+        )
+        .unwrap();
+        Self { dir }
+    }
+}
+
+impl Drop for ActivatableFprintd {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+async fn name_has_owner(conn: &Connection) -> bool {
+    zbus::fdo::DBusProxy::new(conn)
+        .await
+        .unwrap()
+        .name_has_owner(fprintd::SERVICE.try_into().unwrap())
+        .await
+        .unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_fprintd_is_activated_for_has_enrolled() {
+    let services = ActivatableFprintd::new();
+    let bus = PrivateBus::start_with_services(Some(&services.dir));
+    let client = bus.connect().await;
+    assert!(
+        !name_has_owner(&client).await,
+        "fprintd must not be running"
+    );
+    assert_eq!(fprintd::has_enrolled(&client, USER).await, Ok(true));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn idle_fprintd_is_activated_for_verify() {
+    let services = ActivatableFprintd::new();
+    let bus = PrivateBus::start_with_services(Some(&services.dir));
+    let client = bus.connect().await;
+    assert!(
+        !name_has_owner(&client).await,
+        "fprintd must not be running"
+    );
+    assert_eq!(
+        fprintd::verify(
+            &client,
+            USER,
+            Duration::from_secs(10),
+            CancellationToken::new()
+        )
+        .await,
+        UvResult::Match
+    );
 }
