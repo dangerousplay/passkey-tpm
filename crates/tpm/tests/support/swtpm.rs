@@ -84,6 +84,39 @@ impl Swtpm {
     pub fn context(&self) -> Context {
         Context::new(self.tcti()).expect("connect to swtpm")
     }
+
+    /// `TPM2_DictionaryAttackParameters` with the (empty) lockout authorisation, sent as a raw
+    /// command because tss-esapi 7.7 has no binding (B-002). swtpm defaults to maxTries 3.
+    /// Call it while no [`Context`] is connected: swtpm serves one connection at a time.
+    #[allow(dead_code)] // Only some test binaries change the DA parameters.
+    pub fn set_da_parameters(&self, max_tries: u32, recovery_s: u32, lockout_recovery_s: u32) {
+        use std::io::{Read, Write};
+        use tss_esapi::constants::tss::{
+            TPM2_CC_DictionaryAttackParameters, TPM2_RH_LOCKOUT, TPM2_RS_PW, TPM2_ST_SESSIONS,
+        };
+        let mut body = Vec::new();
+        body.extend_from_slice(&TPM2_RH_LOCKOUT.to_be_bytes());
+        // Password session with an empty password: handle, nonce (0), attributes, hmac (0).
+        body.extend_from_slice(&9u32.to_be_bytes());
+        body.extend_from_slice(&TPM2_RS_PW.to_be_bytes());
+        body.extend_from_slice(&[0, 0, 0, 0, 0]);
+        for value in [max_tries, recovery_s, lockout_recovery_s] {
+            body.extend_from_slice(&value.to_be_bytes());
+        }
+        let mut command = Vec::new();
+        command.extend_from_slice(&TPM2_ST_SESSIONS.to_be_bytes());
+        let size = u32::try_from(10 + body.len()).expect("size");
+        command.extend_from_slice(&size.to_be_bytes());
+        command.extend_from_slice(&TPM2_CC_DictionaryAttackParameters.to_be_bytes());
+        command.extend_from_slice(&body);
+
+        let mut stream = TcpStream::connect(("127.0.0.1", self.port)).expect("connect");
+        stream.write_all(&command).expect("send");
+        let mut header = [0u8; 10];
+        stream.read_exact(&mut header).expect("response");
+        let rc = u32::from_be_bytes([header[6], header[7], header[8], header[9]]);
+        assert_eq!(rc, 0, "TPM2_DictionaryAttackParameters failed: {rc:#x}");
+    }
 }
 
 impl Drop for Swtpm {

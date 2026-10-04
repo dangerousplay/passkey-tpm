@@ -27,6 +27,61 @@ const RESIDENT_FILE: &str = "resident.v1";
 const REVOKED_FILE: &str = "revoked.v1";
 /// CTAP 2.1 maximum PIN retries.
 const MAX_PIN_RETRIES: u8 = 8;
+/// Per-uid wrong-PIN ledgers (HARD-05), outside the user directories so that
+/// authenticatorReset doesn't clear them.
+const DA_DIR: &str = "da";
+
+/// Wrong PINs a uid has charged to the TPM-wide dictionary-attack counter and not yet had
+/// forgiven. File format: `u32 failures ‖ u64 since` (big-endian, Unix seconds).
+#[derive(Debug, Clone, Copy)]
+struct DaLedger {
+    failures: u32,
+    /// Start of the current recovery interval.
+    since: u64,
+}
+
+impl DaLedger {
+    /// The ledger at `now` after the TPM forgave one failure per `interval_s` seconds. An
+    /// interval of 0 forgives nothing, so the ledger doesn't decay either.
+    fn decayed(self, now: u64, interval_s: u32) -> Self {
+        let mut ledger = self;
+        if interval_s > 0 {
+            let interval = u64::from(interval_s);
+            let forgiven = now.saturating_sub(ledger.since) / interval;
+            ledger.failures = ledger
+                .failures
+                .saturating_sub(u32::try_from(forgiven).unwrap_or(u32::MAX));
+            ledger.since = ledger
+                .since
+                .saturating_add(forgiven.saturating_mul(interval));
+        }
+        if ledger.failures == 0 {
+            ledger.since = now;
+        }
+        ledger
+    }
+
+    fn encode(self) -> [u8; 12] {
+        let mut out = [0; 12];
+        out[..4].copy_from_slice(&self.failures.to_be_bytes());
+        out[4..].copy_from_slice(&self.since.to_be_bytes());
+        out
+    }
+
+    fn decode(bytes: &[u8]) -> Option<Self> {
+        let (failures, since) = bytes.split_first_chunk::<4>()?;
+        Some(Self {
+            failures: u32::from_be_bytes(*failures),
+            since: u64::from_be_bytes(since.try_into().ok()?),
+        })
+    }
+}
+
+fn now_s() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
 
 struct User {
     store: GateStore,
@@ -226,6 +281,64 @@ impl TpmBackend {
     }
 }
 
+impl TpmBackend {
+    fn da_ledger_path(&self, uid: Uid) -> PathBuf {
+        self.state_dir.join(DA_DIR).join(uid.0.to_string())
+    }
+
+    fn read_da_ledger(&self, uid: Uid) -> std::result::Result<DaLedger, TpmError> {
+        match std::fs::read(self.da_ledger_path(uid)) {
+            // A corrupt ledger fails closed: the budget counts as spent.
+            Ok(bytes) => DaLedger::decode(&bytes).ok_or(TpmError::Lockout),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(DaLedger {
+                failures: 0,
+                since: 0,
+            }),
+            Err(_) => Err(TpmError::Unavailable),
+        }
+    }
+
+    fn write_da_ledger(&self, uid: Uid, ledger: DaLedger) -> std::result::Result<(), TpmError> {
+        create_private_dir(&self.state_dir.join(DA_DIR)).map_err(|_| TpmError::Unavailable)?;
+        fsutil::write_atomic(&self.da_ledger_path(uid), &ledger.encode())
+            .map_err(|_| TpmError::Unavailable)
+    }
+
+    /// Runs `check`, a dictionary-attack-counted PIN check, against `uid`'s wrong-PIN budget
+    /// (HARD-05). The budget is one CTAP retry cycle (8), and below the TPM's `maxTries`, so
+    /// one uid can't lock out the TPM for everyone. It survives authenticatorReset and is
+    /// forgiven at the TPM's own rate, one failure per recovery interval. The failure is
+    /// charged before the check (crash-safe, like the CTAP retry counter) and refunded unless
+    /// the TPM reports a wrong PIN.
+    fn da_charged<T>(
+        &mut self,
+        uid: Uid,
+        check: impl FnOnce(&mut Self) -> std::result::Result<T, TpmError>,
+    ) -> std::result::Result<T, TpmError> {
+        let da = crate::health::da_status(&mut self.ctx).map_err(|e| e.to_tpm_error())?;
+        let budget = u32::from(MAX_PIN_RETRIES).min(da.max_tries.saturating_sub(1));
+        let ledger = self
+            .read_da_ledger(uid)?
+            .decayed(now_s(), da.recovery_interval_s);
+        if ledger.failures >= budget {
+            return Err(TpmError::Lockout);
+        }
+        self.write_da_ledger(
+            uid,
+            DaLedger {
+                failures: ledger.failures.saturating_add(1),
+                since: ledger.since,
+            },
+        )?;
+        let result = check(self);
+        if !matches!(result, Err(TpmError::WrongPin)) {
+            // Best effort: a failed refund only over-counts, the safe direction.
+            let _ = self.write_da_ledger(uid, ledger);
+        }
+        result
+    }
+}
+
 fn create_private_dir(dir: &Path) -> Result<()> {
     use std::os::unix::fs::DirBuilderExt;
     std::fs::DirBuilder::new()
@@ -321,10 +434,17 @@ impl TpmOps for TpmBackend {
         old: Option<&[u8; 16]>,
         new: &[u8; 16],
     ) -> std::result::Result<(), TpmError> {
-        let pending = self.with_user(uid, |ctx, srk, user| match old {
-            None => pin::begin_set(ctx, srk, &user.store, new),
-            Some(old) => pin::begin_change(ctx, srk, &user.store, old, new),
-        })?;
+        let pending = match old {
+            None => self.with_user(uid, |ctx, srk, user| {
+                pin::begin_set(ctx, srk, &user.store, new)
+            })?,
+            // The TPM checks the old PIN against the DA-protected gate.
+            Some(old) => self.da_charged(uid, |this| {
+                this.with_user(uid, |ctx, srk, user| {
+                    pin::begin_change(ctx, srk, &user.store, old, new)
+                })
+            })?,
+        };
         // Persist the new PIN before the NV index is redefined, then complete and clear the
         // pending change (HARD-06). A crash or error in between is completed on the next load,
         // so the PIN is the old or the new one, never neither.
@@ -333,9 +453,14 @@ impl TpmOps for TpmBackend {
     }
 
     fn verify_pin(&mut self, uid: Uid, pin_hash: &[u8; 16]) -> std::result::Result<(), TpmError> {
-        // Same outcome as a provisioned user without a PIN (`pin::verify`).
-        self.with_existing_user(uid, Err(TpmError::PolicyFailed), |ctx, srk, user| {
-            pin::verify(ctx, srk, &user.store, pin_hash)
+        if !self.load(uid).map_err(|e| e.to_tpm_error())? {
+            // Same outcome as a provisioned user without a PIN (`pin::verify`).
+            return Err(TpmError::PolicyFailed);
+        }
+        self.da_charged(uid, |this| {
+            this.with_user(uid, |ctx, srk, user| {
+                pin::verify(ctx, srk, &user.store, pin_hash)
+            })
         })
     }
 
@@ -417,5 +542,39 @@ impl TpmOps for TpmBackend {
             Some(name) => crate::health::check(&mut self.ctx, &name).map_err(|e| e.to_tpm_error()),
             None => self.srk().map(|_| ()).map_err(|e| e.to_tpm_error()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DaLedger;
+
+    fn ledger(failures: u32, since: u64) -> DaLedger {
+        DaLedger { failures, since }
+    }
+
+    #[test]
+    fn da_ledger_forgives_one_failure_per_recovery_interval() {
+        let l = ledger(5, 1000).decayed(1000 + 2 * 60 + 59, 60);
+        assert_eq!(
+            (l.failures, l.since),
+            (3, 1120),
+            "partial interval carries over"
+        );
+        let l = ledger(2, 1000).decayed(1_000_000, 60);
+        assert_eq!((l.failures, l.since), (0, 1_000_000), "restarts when empty");
+        let l = ledger(5, 1000).decayed(u64::MAX, 0);
+        assert_eq!(l.failures, 5, "interval 0 forgives nothing");
+        let l = ledger(5, 1000).decayed(10, 60);
+        assert_eq!((l.failures, l.since), (5, 1000), "clock went backwards");
+    }
+
+    #[test]
+    fn da_ledger_round_trips_and_rejects_bad_lengths() {
+        let l = DaLedger::decode(&ledger(7, 0x0102_0304_0506).encode()).unwrap();
+        assert_eq!((l.failures, l.since), (7, 0x0102_0304_0506));
+        assert!(DaLedger::decode(&[0; 11]).is_none());
+        assert!(DaLedger::decode(&[0; 13]).is_none());
+        assert!(DaLedger::decode(&[]).is_none());
     }
 }
