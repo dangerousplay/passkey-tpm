@@ -120,16 +120,16 @@ The review found a cross-user path on multi-seat / fast-user-switching machines,
 | HARD-08 | hmac-secret on non-hmac credential | P2 | F9 | Tasks | Pending |
 | HARD-09 | Lazy provisioning + cleanup | P2 | F10 | Tasks | Pending |
 | HARD-10 | `/dev/uhid` least privilege | P2 | F2 | Design (G4) | Pending |
-| HARD-11 | CTAPHID INIT handling | P3 | F11 | Tasks | Pending |
-| HARD-12 | Early cancel | P3 | F12 | Tasks | Pending |
+| HARD-11 | CTAPHID INIT handling | P3 | F11 | Execute | Verified (unit) |
+| HARD-12 | Early cancel | P3 | F12 | Execute | Verified (integration-dbus) |
 | HARD-13 | Reset window | P3 | F13 | Tasks (G3) | Pending |
-| HARD-14 | credMgmt auth order | P3 | F14 | Tasks | Pending |
-| HARD-15 | credMgmt raw-bytes MAC | P3 | F15 | Tasks | Pending |
+| HARD-14 | credMgmt auth order | P3 | F14 | Execute | Verified (unit) |
+| HARD-15 | credMgmt raw-bytes MAC | P3 | F15 | Execute | Verified (unit + proptest + fuzz target) |
 | HARD-16 | Use verified `PinRetries` | P3 | F16 | Tasks | Pending |
-| HARD-17 | Zeroize secrets | P3 | F17 | Tasks | Pending |
-| HARD-18 | CLI user remove vs cache | P3 | F18 | Tasks | Pending |
+| HARD-17 | Zeroize secrets | P3 | F17 | Execute | Verified (unit (type-pinned)) |
+| HARD-18 | CLI user remove vs cache | P3 | F18 | Execute | Verified (unit + private bus) |
 | HARD-19 | fsutil temp cleanup | P3 | F19 | Tasks | Pending |
-| HARD-20 | uvd exits on worker death | P3 | F22 | Tasks | Pending |
+| HARD-20 | uvd exits on worker death | P3 | F22 | Execute | Verified (unit) |
 | HARD-21 | PKGBUILD checksum | P3 | F21 | Tasks | Pending |
 
 **Coverage:** 21 total, 21 mapped to tasks, 0 unmapped. (F20, tracked `.pyc`, already fixed in 1192a89.)
