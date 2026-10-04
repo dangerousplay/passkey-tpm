@@ -190,7 +190,8 @@ impl Broker {
     }
 
     /// Registers a cancel token for `uid`'s new request; a still-pending older request of the
-    /// same user is cancelled (only one fingerprint prompt per user at a time).
+    /// same user is cancelled (only one fingerprint prompt per user at a time). The agent
+    /// relays one request at a time, so an older one still here was abandoned by the host.
     fn register_cancel(&self, uid: u32) -> (u64, CancellationToken) {
         let seq = self
             .next_request
@@ -213,7 +214,9 @@ impl Broker {
         }
     }
 
-    async fn run(&self, uid: u32, request: Vec<u8>) -> Vec<u8> {
+    /// Serves one request. `cancel` is registered before any await (HARD-12), so a Cancel
+    /// that arrives while the session, fprintd or the TPM is still being asked is not lost.
+    async fn run(&self, uid: u32, request: Vec<u8>, cancel: CancellationToken) -> Vec<u8> {
         if request.len() > MAX_MSG {
             return vec![STATUS_INVALID_LENGTH];
         }
@@ -252,12 +255,12 @@ impl Broker {
             Step::NeedUv(pending) => pending,
         };
         let outcome = match username {
+            // Cancelled before the prompt: don't claim the reader at all.
+            _ if cancel.is_cancelled() => UvOutcome::Cancelled,
             None => UvOutcome::Unavailable,
             Some(name) => {
-                let (seq, token) = self.register_cancel(uid);
                 let result =
-                    fprintd::verify(&self.fprintd, &name, self.verify_timeout, token).await;
-                self.clear_cancel(uid, seq);
+                    fprintd::verify(&self.fprintd, &name, self.verify_timeout, cancel).await;
                 match result {
                     // The only place evidence is created: a real fprintd match for this uid.
                     UvResult::Match => UvOutcome::Matched(UvEvidence::from_fprintd_match(uid)),
@@ -286,14 +289,18 @@ impl Broker {
         request: Vec<u8>,
     ) -> fdo::Result<Vec<u8>> {
         let uid = Self::caller_uid(conn, &header).await?;
-        if !self.sessions.is_active(uid).await {
+        let (seq, cancel) = self.register_cancel(uid);
+        let response = if self.sessions.is_active(uid).await {
+            self.run(uid, request, cancel).await
+        } else {
             #[allow(clippy::print_stderr)]
             {
                 eprintln!("denied uid={uid}: no active seat session");
             }
-            return Ok(vec![STATUS_OPERATION_DENIED]);
-        }
-        Ok(self.run(uid, request).await)
+            vec![STATUS_OPERATION_DENIED]
+        };
+        self.clear_cancel(uid, seq);
+        Ok(response)
     }
 
     /// Cancels the calling user's pending fingerprint request, if any.

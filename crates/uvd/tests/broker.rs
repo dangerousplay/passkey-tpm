@@ -32,6 +32,21 @@ impl SessionPolicy for Seat {
     }
 }
 
+/// At the seat, but the session check is slow (a logind round trip under load).
+struct SlowSeat(Duration);
+impl SessionPolicy for SlowSeat {
+    fn is_active<'a>(
+        &'a self,
+        _uid: u32,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
+        let delay = self.0;
+        Box::pin(async move {
+            tokio::time::sleep(delay).await;
+            true
+        })
+    }
+}
+
 struct Fixture {
     _tpm: Swtpm,
     _bus: PrivateBus,
@@ -58,6 +73,10 @@ async fn fixture(mock_fprintd: MockFprintd) -> Fixture {
 }
 
 async fn fixture_at_seat(mock_fprintd: MockFprintd, active: bool) -> Fixture {
+    fixture_with(mock_fprintd, Box::new(Seat(active))).await
+}
+
+async fn fixture_with(mock_fprintd: MockFprintd, sessions: Box<dyn SessionPolicy>) -> Fixture {
     let tpm = Swtpm::start();
     let bus = PrivateBus::start();
     let fprintd = bus.connect().await;
@@ -78,7 +97,7 @@ async fn fixture_at_seat(mock_fprintd: MockFprintd, active: bool) -> Fixture {
         worker,
         broker_conn.clone(),
         Box::new(AlwaysAlice),
-        Box::new(Seat(active)),
+        sessions,
         Duration::from_secs(5),
     );
     serve(&broker_conn, broker).await.expect("serve broker");
@@ -253,6 +272,31 @@ async fn cancel_aborts_the_fingerprint_prompt() {
     let resp = tokio::time::timeout(Duration::from_secs(3), pending)
         .await
         .expect("finished")
+        .expect("task");
+    assert_eq!(resp, vec![0x2D], "CTAP2_ERR_KEEPALIVE_CANCEL");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_before_the_prompt_starts_still_cancels() {
+    // HARD-12: a CTAPHID CANCEL can reach the broker while it is still checking the session
+    // or asking fprintd for enrolled fingers; it must not be lost, leaving a full prompt.
+    let f = fixture_with(
+        MockFprintd::with_results(&[], Duration::from_millis(10)),
+        Box::new(SlowSeat(Duration::from_millis(800))),
+    )
+    .await;
+    let client = f.client.clone();
+    let pending = tokio::spawn(async move {
+        ctap(&client, &make_credential_request("a.example", &[1; 32])).await
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    f.client
+        .call_method(Some(BUS_NAME), OBJECT_PATH, Some(BUS_NAME), "Cancel", &())
+        .await
+        .expect("Cancel");
+    let resp = tokio::time::timeout(Duration::from_secs(3), pending)
+        .await
+        .expect("cancelled without waiting for the verify timeout")
         .expect("task");
     assert_eq!(resp, vec![0x2D], "CTAP2_ERR_KEEPALIVE_CANCEL");
 }
