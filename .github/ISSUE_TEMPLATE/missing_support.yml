@@ -34,7 +34,7 @@ body:
     attributes:
       label: System information
       description: |
-        Output of `sudo passkey-tpm-cli info` (or without sudo if you prefer; TPM details will
+        Output of `sudo passkey-tpm info` (or without sudo if you prefer; TPM details will
         be missing). If passkey-tpm can't be installed, paste `cat /etc/os-release` and
         `uname -r` instead.
       render: text
@@ -52,6 +52,6 @@ body:
     id: version
     attributes:
       label: passkey-tpm version
-      description: Output of `passkey-tpm-cli version`, or "not installed".
+      description: Output of `passkey-tpm version`, or "not installed".
     validations:
       required: true

@@ -26,8 +26,8 @@ pub const INSTALL: &[(&str, &str, u32)] = &[
         0o755,
     ),
     (
-        "target/release/passkey-tpm-cli",
-        "{prefix}/bin/passkey-tpm-cli",
+        "target/release/passkey-tpm",
+        "{prefix}/bin/passkey-tpm",
         0o755,
     ),
     (

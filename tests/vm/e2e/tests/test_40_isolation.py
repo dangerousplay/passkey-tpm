@@ -29,6 +29,6 @@ def test_bob_cannot_use_alices_credential(alice, bob):
 
 
 def test_users_get_separate_gates(alice, bob):
-    out = pkt.run("passkey-tpm-cli", "tpm", "status").stdout
+    out = pkt.run("passkey-tpm", "tpm", "status").stdout
     indexes = [l for l in out.splitlines() if l.strip().startswith("0x015")]
     assert len(indexes) >= 6, f"3 gates per user expected:\n{out}"

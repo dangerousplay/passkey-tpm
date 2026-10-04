@@ -15,10 +15,10 @@ def test_users_are_enrolled(enrolled):
 
 
 def test_info_reports_tpm_and_fingerprint(enrolled):
-    """`passkey-tpm-cli info` is what bug reports ask for: it must work on a real system."""
+    """`passkey-tpm info` is what bug reports ask for: it must work on a real system."""
     env = {"PATH": "/usr/bin:/bin", "USER": enrolled[0]}
-    out = pkt.run("passkey-tpm-cli", "info", env=env).stdout
+    out = pkt.run("passkey-tpm", "info", env=env).stdout
     assert "TPM 2.0" in out, out
     assert "tpm vendor" in out and "firmware" in out, out
     assert "fingers enrolled for this user: yes" in out, out
-    assert pkt.run("passkey-tpm-cli", "version").stdout.startswith("passkey-tpm "), out
+    assert pkt.run("passkey-tpm", "version").stdout.startswith("passkey-tpm "), out

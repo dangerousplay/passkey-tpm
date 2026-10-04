@@ -11,5 +11,5 @@ cat <<'MSG'
 passkey-tpm installed. Next steps:
   1. Enroll a fingerprint if you haven't:   fprintd-enroll
   2. Start the virtual security key:        systemctl --user enable --now passkey-tpm-agent
-  3. Check the TPM:                          passkey-tpm-cli tpm status
+  3. Check the TPM:                          passkey-tpm tpm status
 MSG

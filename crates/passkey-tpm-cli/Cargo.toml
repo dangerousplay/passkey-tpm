@@ -9,6 +9,10 @@ repository.workspace = true
 authors.workspace = true
 publish = false
 
+[[bin]]
+name = "passkey-tpm"
+path = "src/main.rs"
+
 [dependencies]
 passkey-tpm-tpm = { path = "../passkey-tpm-tpm" }
 passkey-tpm-wire = { path = "../passkey-tpm-wire" }

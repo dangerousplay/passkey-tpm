@@ -16,7 +16,7 @@ before:
     - cargo xtask dist --no-build
     # The CLI comes from the Rust build below (it gives the packages their architecture);
     # drop the trees' copy so nfpm doesn't see the file twice.
-    - rm -f target/pkgroot/usr/bin/passkey-tpm-cli target/pkgroot-arch/usr/bin/passkey-tpm-cli
+    - rm -f target/pkgroot/usr/bin/passkey-tpm target/pkgroot-arch/usr/bin/passkey-tpm
 
 # The broker and agent are built by the hooks above. The CLI is built here with the Rust
 # builder (plain cargo, native target) so the packages carry the right architecture;
@@ -27,7 +27,7 @@ builds:
     tool: cargo
     command: build
     dir: .
-    binary: passkey-tpm-cli
+    binary: passkey-tpm
     targets: [x86_64-unknown-linux-gnu]
     flags: [--release, --locked, --package=passkey-tpm-cli]
 

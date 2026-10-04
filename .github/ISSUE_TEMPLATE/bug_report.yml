@@ -43,8 +43,8 @@ body:
     attributes:
       label: System information
       description: |
-        Output of `passkey-tpm-cli info`. For TPM vendor and lockout details, run
-        `sudo passkey-tpm-cli info` instead. It contains no secrets or serial numbers.
+        Output of `passkey-tpm info`. For TPM vendor and lockout details, run
+        `sudo passkey-tpm info` instead. It contains no secrets or serial numbers.
       render: text
       placeholder: |
         passkey-tpm   0.1.0 (x86_64-linux)
@@ -66,5 +66,5 @@ body:
     attributes:
       label: Checks
       options:
-        - label: I'm using the latest release (`passkey-tpm-cli version`).
+        - label: I'm using the latest release (`passkey-tpm version`).
         - label: I searched existing issues.

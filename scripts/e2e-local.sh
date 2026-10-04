@@ -18,7 +18,7 @@ cleanup() {
     for p in "${pids[@]}"; do kill "$p" 2>/dev/null; done
     wait 2>/dev/null
     if [[ -f "$work/state/$(id -u)/gates.v1" ]]; then
-        PASSKEY_TPM_TCTI=$TCTI target/release/passkey-tpm-cli user remove --uid "$(id -u)" --state-dir "$work/state"
+        PASSKEY_TPM_TCTI=$TCTI target/release/passkey-tpm user remove --uid "$(id -u)" --state-dir "$work/state"
     fi
     for node in "${acls[@]}"; do sudo -n setfacl -x "u:$me" "$node" 2>/dev/null; done
     rm -rf "$work"

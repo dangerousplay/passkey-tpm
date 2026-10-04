@@ -54,7 +54,7 @@ cargo run --offline -q -p xtask -- dist --no-build --destdir %{buildroot} --pref
 %files
 %license LICENSE-MIT LICENSE-APACHE
 %doc README.md SECURITY.md docs/threat-model.md
-%{_bindir}/passkey-tpm-cli
+%{_bindir}/passkey-tpm
 %{_libexecdir}/passkey-tpm/
 %{_unitdir}/passkey-tpm-uvd.service
 %{_userunitdir}/passkey-tpm-agent.service

@@ -192,7 +192,7 @@
 ### L-007: Every test that touches a real TPM must clean up on every exit path
 
 **Context:** An interrupted E2E run left three passkey-tpm NV gates on the real TPM; its state dir (with their secrets) was already deleted. The NV scan also showed indexes from other software (systemd/OEM) inside our then-broad allocation range.
-**Solution:** The harness traps EXIT/INT/TERM/HUP; `passkey-tpm-cli tpm status` lists our NV indexes; orphans were verified against our exact template before deletion; the allocation range is narrowed to 0x01500000–0x0150FFFF.
+**Solution:** The harness traps EXIT/INT/TERM/HUP; `passkey-tpm tpm status` lists our NV indexes; orphans were verified against our exact template before deletion; the allocation range is narrowed to 0x01500000–0x0150FFFF.
 **Prevents:** Leaking NV space on users' TPMs and touching other software's indexes.
 
 ### L-008: The VM test bed found three packaging bugs no host test could see
@@ -247,7 +247,7 @@
 - [ ] Build packages in clean chroots (makepkg, mock/COPR, sbuild/PPA)
 - [ ] Hardware E2E with real fprintd: install packaging/udev rule (uaccess on /dev/uhid) + fprintd, run broker+agent, `scripts/e2e-fido2.sh`, then webauthn.io in Chromium and Firefox
 - [ ] Kani: the CBOR `build` loop is not proven (CBMC blow-up on recursive drop); consider an iterative builder or a Verus proof
-- [ ] CLI: `passkey-tpm-cli tpm status` (DA warning, SRK state) using `health::da_status`
+- [ ] CLI: `passkey-tpm tpm status` (DA warning, SRK state) using `health::da_status`
 - [ ] Broker startup: re-define the PIN NV index from the persisted new auth if missing (crash during `pin_gate::rotate`)
 - [ ] Trusted-prompt feasibility (broker-driven prompt vs credentialsd-ui)
 - [ ] ADR-004: ctap-types vs passkey-types (check Debian packaging status and canonical CBOR handling)

@@ -61,7 +61,7 @@ Each release also has `checksums.txt` and a source tarball. Distribution reposit
 3. Check that it found the TPM (optional):
 
    ```sh
-   passkey-tpm-cli tpm status
+   passkey-tpm tpm status
    ```
 
 The background service (`passkey-tpm-uvd`) starts on demand; there is nothing else to enable.
@@ -111,8 +111,8 @@ all of *your* passkeys and your PIN; it doesn't affect other users.
 |---|---|
 | Browser says no security key found | `systemctl --user status passkey-tpm-agent`; `ls -l /dev/uhid` (the package loads the `uhid` module; reboot once after installing if it's missing) |
 | Fingerprint never accepted | `fprintd-verify` works? Enroll again with `fprintd-enroll` |
-| Not sure what's wrong | `passkey-tpm-cli info` checks the TPM, `/dev/uhid`, fprintd and both services |
-| "TPM not available" | `passkey-tpm-cli tpm status`; enable the TPM / fTPM / PTT in the firmware settings |
+| Not sure what's wrong | `passkey-tpm info` checks the TPM, `/dev/uhid`, fprintd and both services |
+| "TPM not available" | `passkey-tpm tpm status`; enable the TPM / fTPM / PTT in the firmware settings |
 | PIN locked or TPM lockout | wait for the TPM lockout to expire (usually minutes to hours), or reset the security key |
 
 Logs: `journalctl -u passkey-tpm-uvd` (system service) and
@@ -120,7 +120,7 @@ Logs: `journalctl -u passkey-tpm-uvd` (system service) and
 
 ### Reporting a problem or missing support
 
-`passkey-tpm-cli version` prints the installed version. `passkey-tpm-cli info` prints a
+`passkey-tpm version` prints the installed version. `passkey-tpm info` prints a
 system report (distribution, kernel, machine model, TPM, fingerprint reader, service state)
 without secrets or serial numbers; run it with `sudo` to include TPM vendor and lockout
 details. Paste it into a [new issue](https://github.com/dangerousplay/passkey-tpm/issues/new/choose):
@@ -157,7 +157,7 @@ Your passkeys stay in the TPM and in `/var/lib/passkey-tpm` so a reinstall keeps
 delete them permanently (this can't be undone):
 
 ```sh
-sudo passkey-tpm-cli user remove --uid "$(id -u)"
+sudo passkey-tpm user remove --uid "$(id -u)"
 ```
 
 ## Contributing

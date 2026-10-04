@@ -1,4 +1,4 @@
-//! `passkey-tpm-cli info`: a diagnostics report for bug reports.
+//! `passkey-tpm info`: a diagnostics report for bug reports.
 //!
 //! Every probe is best effort: a failure becomes a line in the report, never an error. The
 //! report contains no secrets, serial numbers, user names or credential data.

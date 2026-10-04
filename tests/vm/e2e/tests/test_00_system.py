@@ -10,7 +10,7 @@ LIBEXEC = "/usr/libexec/passkey-tpm"
     [
         (f"{LIBEXEC}/passkey-tpm-uvd", 0o755),
         (f"{LIBEXEC}/passkey-tpm-agent", 0o755),
-        ("/usr/bin/passkey-tpm-cli", 0o755),
+        ("/usr/bin/passkey-tpm", 0o755),
         ("/usr/lib/systemd/system/passkey-tpm-uvd.service", 0o644),
         ("/usr/lib/systemd/user/passkey-tpm-agent.service", 0o644),
         ("/usr/share/dbus-1/system.d/io.github.dangerousplay.PasskeyTpm1.conf", 0o644),

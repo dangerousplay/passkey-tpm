@@ -1,10 +1,10 @@
-//! `passkey-tpm-cli`: administration of passkey-tpm.
+//! `passkey-tpm`: administration of passkey-tpm.
 //!
 //! ```text
-//! passkey-tpm-cli version                             package version
-//! passkey-tpm-cli info                                diagnostics report for bug reports
-//! passkey-tpm-cli tpm status                          TPM type, SRK and dictionary-attack state
-//! passkey-tpm-cli user remove --uid N [--state-dir D] remove a user's gates and state
+//! passkey-tpm version                             package version
+//! passkey-tpm info                                diagnostics report for bug reports
+//! passkey-tpm tpm status                          TPM type, SRK and dictionary-attack state
+//! passkey-tpm user remove --uid N [--state-dir D] remove a user's gates and state
 //! ```
 //! `PASSKEY_TPM_TCTI` selects the TPM (default `device:/dev/tpmrm0`).
 #![allow(clippy::print_stdout, clippy::print_stderr)]
@@ -21,10 +21,10 @@ use tss_esapi::tcti_ldr::TctiNameConf;
 use tss_esapi::Context;
 
 const USAGE: &str = "usage:
-  passkey-tpm-cli version
-  passkey-tpm-cli info
-  passkey-tpm-cli tpm status
-  passkey-tpm-cli user remove --uid N [--state-dir DIR]";
+  passkey-tpm version
+  passkey-tpm info
+  passkey-tpm tpm status
+  passkey-tpm user remove --uid N [--state-dir DIR]";
 
 /// Package version and target, e.g. `0.1.0 (x86_64-linux)`.
 fn version() -> String {
