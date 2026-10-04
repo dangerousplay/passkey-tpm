@@ -1,0 +1,5 @@
+[D-BUS Service]
+Name=io.github.dangerousplay.PasskeyTpm1
+Exec=/bin/false
+User=passkey-tpm
+SystemdService=passkey-tpm-uvd.service

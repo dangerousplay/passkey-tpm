@@ -1,0 +1,12 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: passkey-tpm
+Source: https://github.com/dangerousplay/passkey-tpm
+
+Files: *
+Copyright: 2026 Davi Henrique and passkey-tpm contributors
+License: MIT or Apache-2.0
+ On Debian systems the Apache License 2.0 is in /usr/share/common-licenses/Apache-2.0.
+ .
+ Permission is hereby granted, free of charge, to any person obtaining a copy of this
+ software and associated documentation files, to deal in the Software without
+ restriction, subject to the conditions in LICENSE-MIT.

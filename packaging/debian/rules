@@ -1,0 +1,20 @@
+#!/usr/bin/make -f
+# Builds with cargo directly (suitable for a PPA / local packages). An upload to the
+# Debian archive would package each crate through debcargo instead of fetching them.
+export CARGO_HOME = $(CURDIR)/debian/cargo-home
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	cargo build --release --locked -p passkey-tpm-uvd -p passkey-tpm-agent -p passkey-tpm-cli
+
+override_dh_auto_test:
+	cargo test --release --locked -p passkey-tpm-core -p passkey-tpm-wire -p passkey-tpm-agent
+
+override_dh_auto_install:
+	cargo run --release --locked -q -p xtask -- dist --no-build --destdir debian/passkey-tpm --libexecdir /usr/libexec
+
+override_dh_installsystemd:
+	dh_installsystemd --name=passkey-tpm-uvd --no-start
+	dh_installsystemd --user --name=passkey-tpm-agent --no-enable --no-start

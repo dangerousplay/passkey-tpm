@@ -1,0 +1,11 @@
+// Let the passkey-tpm broker run fingerprint verification on behalf of the user who
+// called it. fprintd requires `setusername` to verify for a user other than the caller,
+// and a system service has no active session for `verify`'s default allow_active rule.
+// Only the dedicated `passkey-tpm` system user gets this; enrolment is not granted.
+polkit.addRule(function (action, subject) {
+    if ((action.id == "net.reactivated.fprint.device.verify" ||
+         action.id == "net.reactivated.fprint.device.setusername") &&
+        subject.user == "passkey-tpm") {
+        return polkit.Result.YES;
+    }
+});

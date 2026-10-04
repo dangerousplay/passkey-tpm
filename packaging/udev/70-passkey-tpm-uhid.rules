@@ -1,0 +1,7 @@
+# Give the user on the active local seat access to /dev/uhid so passkey-tpm-agent can
+# create its virtual FIDO device, instead of a static group such as plugdev.
+# Note: /dev/uhid can create any HID device (including keyboards) for the active session,
+# which that user can already type into. Distributions that prefer not to grant this can
+# run the agent with a dedicated helper instead (tracked for M3).
+KERNEL=="uhid", SUBSYSTEM=="misc", TAG+="uaccess"
+# The virtual device's hidraw node is tagged for browsers by systemd's 60-fido-id.rules.

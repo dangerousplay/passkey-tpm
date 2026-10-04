@@ -1,0 +1,21 @@
+[Unit]
+Description=passkey-tpm session agent (virtual FIDO security key)
+Documentation=https://github.com/dangerousplay/passkey-tpm
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/passkey-tpm/passkey-tpm-agent
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=graphical-session.target

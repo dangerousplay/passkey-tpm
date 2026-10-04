@@ -1,0 +1,17 @@
+Source: passkey-tpm
+Section: admin
+Priority: optional
+Maintainer: Davi Henrique <dangerousplay715@gmail.com>
+Build-Depends: debhelper-compat (= 13), cargo, rustc (>= 1.98), libtss2-dev, pkgconf, dh-sequence-installsysusers
+Standards-Version: 4.7.0
+Homepage: https://github.com/dangerousplay/passkey-tpm
+Rules-Requires-Root: no
+
+Package: passkey-tpm
+Architecture: linux-any
+Depends: ${shlibs:Depends}, ${misc:Depends}, fprintd, dbus, polkitd, systemd
+Recommends: libfido2-1
+Description: TPM-backed passkeys (FIDO2/WebAuthn) for Linux
+ passkey-tpm is a FIDO2/WebAuthn authenticator whose credentials are bound to the
+ machine's TPM 2.0 and unlocked with fingerprint or PIN. A privileged broker holds the
+ TPM policy secrets; a per-user agent exposes a virtual security key.
