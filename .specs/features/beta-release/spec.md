@@ -13,7 +13,7 @@ There is no installable build yet. Testers need `.deb`, `.rpm` and Arch packages
 - [x] Every package and `checksums.txt` has a keyless Sigstore signature tied to the release workflow identity
 - [x] Every checksummed file has SLSA build provenance (GitHub attestation)
 - [x] Pre-release versions sort before the final release in dpkg, rpm and pacman
-- [ ] `v0.1.0-beta.1` published after the P1 security fixes land (signed draft built 2026-10-04; publish after testing)
+- [x] `v0.1.0-beta.1` published after the P1 security fixes land (2026-10-04)
 
 ## Out of Scope
 
@@ -71,7 +71,7 @@ There is no installable build yet. Testers need `.deb`, `.rpm` and Arch packages
 | REL-04 | Signed beta packages | Execute | Verified (local tag snapshot + `vercmp`) |
 | REL-05 | Signed beta packages | Execute | Verified |
 | REL-06 | Gated beta | Execute | Verified (HARD-01..04 before tag) |
-| REL-07 | Gated beta | Tasks | Pending |
+| REL-07 | Gated beta | Execute | Verified (known issues in the published notes) |
 
 **Coverage:** 7 total, 7 mapped to tasks, 0 unmapped
 

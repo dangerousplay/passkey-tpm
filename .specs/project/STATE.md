@@ -1,7 +1,7 @@
 # State
 
 **Last Updated:** 2026-10-04
-**Current Work:** Signed draft pre-release `v0.1.0-beta.1` built from branch `release/v0.1.0` (run 37243451613); cosign bundles and build provenance verified for every package. Under test. Next: known-issues notes + publish (beta-release B11–B12); hardening HARD-07/10/13 wait on G2–G4, HARD-16 open; then the CTAP crates (Discuss C-G1..C-G5).
+**Current Work:** `v0.1.0-beta.1` published as a public pre-release (signed packages, provenance, git-cliff notes with known issues) from branch `release/v0.1.0`; collecting tester feedback. Next: hardening HARD-07/10/13 (G2–G4 decisions), HARD-16; VM smoke test of the released `.deb`; then the CTAP crates (Discuss C-G1..C-G5).
 
 ---
 
@@ -115,7 +115,7 @@
 **Decision:** A `v*` tag runs `.github/workflows/release.yml`: the fast gate, `cargo xtask changelog --latest` (git-cliff, GitHub-linked notes from Conventional Commits) and `cargo xtask release --publish` (GoReleaser OSS: Rust builder for the CLI, nfpm `.deb`/`.rpm`/Arch packages of the `cargo xtask dist` tree, checksums, source tarball, draft GitHub release). Both tools are pinned and checksum-verified in `tools/` like the other tools. CI builds a snapshot on every PR (`release` gate step). `CHANGELOG.md` is generated, never hand-edited.
 **Reason:** One declarative file replaces per-format packaging scripts in CI; the same commands run locally. `cargo xtask dist` stays the single install layout, so GoReleaser packages and distro recipes (debian/, spec, PKGBUILD) can't drift. The `prebuilt` builder is Pro-only, hence a real Rust build of the CLI to give nfpm an architecture.
 **Trade-off:** Binary packages target Ubuntu 24.04 library names (deb) and glibc ≥ 2.39; they're a convenience channel, not a replacement for distro packaging (M3). git-cliff runs `--offline` without `GITHUB_TOKEN`.
-**Impact:** `.goreleaser.yaml`, `cliff.toml`, `packaging/nfpm/`, `xtask` tasks `changelog` and `release`; end-user `README.md`, developer docs in `CONTRIBUTING.md`.
+**Impact:** `.goreleaser.yaml`, `cliff.toml`, `packaging/nfpm/`, `xtask` tasks `changelog` and `release`; end-user `README.md`, developer docs in `CONTRIBUTING.md`. Amended 2026-10-04 (L-011): notes are set by the workflow with `gh release edit`, not passed to GoReleaser.
 
 ### AD-017: Keyless Sigstore signing + build provenance for release assets (2026-10-04)
 
@@ -248,6 +248,13 @@
 **Problem:** nfpm's Arch packager only appends `Prerelease` inside its epoch branch; the beta would have looked like the final 0.1.0 and blocked the real upgrade.
 **Solution:** `epoch: "0"` in the GoReleaser Arch override (pacman's default, no other effect) → `0:0.1.0beta.1-1`; `vercmp` confirms it sorts before `0.1.0`.
 **Prevents:** Pre-releases that shadow final releases in pacman. Check package versions of every format on each new tag scheme.
+
+### L-011: GoReleaser drops `--release-notes` while `changelog.disable` is set
+
+**Context:** The first signed release (`v0.1.0-beta.1`) came out with an empty body, although git-cliff had written the notes file.
+**Problem:** GoReleaser's changelog pipe returns early when `changelog.disable` is true. That pipe is also the one that loads `--release-notes`, so the file was silently ignored.
+**Solution:** git-cliff stays the only source of notes. The workflow sets the body with `gh release edit` after publishing. Per-release text goes in `.github/release-notes/<tag>.md` (`cargo xtask changelog --tag-message`).
+**Prevents:** Releases without notes. After every release, check the published body, not only the assets.
 
 ---
 

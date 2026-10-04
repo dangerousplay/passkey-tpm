@@ -2,7 +2,7 @@
 
 **Spec:** `.specs/features/beta-release/spec.md`
 **Testing:** `.specs/codebase/TESTING.md` (xtask/CI/config layer: gate = running the task)
-**Status:** Signed draft pre-release built and verified (2026-10-04); testing before B11 notes + B12 publish
+**Status:** Published as a public pre-release (2026-10-04); open: VM smoke test of the downloaded `.deb`, regenerate CHANGELOG.md (B8)
 
 ## Execution Plan
 
@@ -29,9 +29,10 @@ Next:  B6 → B7 ──────────────┐
 | B7 | ⏭ skipped | — | User asked for the real build; the first signed run on the real tag succeeded |
 | B9 | ✅ | — | HARD-01..04 Verified (also 13 more HARD-*); 254 tests, Verus 103/0, VM 41/41 |
 | B10 | ✅ | b7086da | Tag `v0.1.0-beta.1` (SSH-signed) on `release/v0.1.0`; release run 37243451613 green (gate, notes, build+sign, provenance) |
-| B11 | ✅ (verify) | — | 2026-10-04: `sha256sum -c` OK for all 4 files; `cosign verify-blob` (v3.1.3, tag identity regexp) **Verified OK** for .deb, .rpm, .pkg.tar.zst, checksums.txt; `gh attestation verify` OK for all 3 packages + tarball. Package versions: deb `0.1.0~beta.1`, rpm `0.1.0~beta.1`, Arch `0:0.1.0beta.1-1`. Known-issues section in the notes still to add |
+| B11 | ✅ (verify) | — | 2026-10-04: `sha256sum -c` OK for all 4 files; `cosign verify-blob` (v3.1.3, tag identity regexp) **Verified OK** for .deb, .rpm, .pkg.tar.zst, checksums.txt; `gh attestation verify` OK for all 3 packages + tarball. Package versions: deb `0.1.0~beta.1`, rpm `0.1.0~beta.1`, Arch `0:0.1.0beta.1-1`. Notes: GoReleaser published an empty body (L-011); set from git-cliff + `.github/release-notes/v0.1.0-beta.1.md` (intro, what to test, verification, known issues) — fixed for future tags in 5fbc108 |
+| B12 | ✅ (published) | — | Published as a pre-release 2026-10-04T23:38:41Z: https://github.com/dangerousplay/passkey-tpm/releases/tag/v0.1.0-beta.1. VM smoke test of the downloaded `.deb` still to do |
 
-**Draft pre-release:** https://github.com/dangerousplay/passkey-tpm/releases (draft, `v0.1.0-beta.1`) — under test; not published yet (B12).
+**Pre-release:** https://github.com/dangerousplay/passkey-tpm/releases/tag/v0.1.0-beta.1 (public, testing).
 
 ## Task Breakdown (remaining)
 
