@@ -2,6 +2,7 @@
 
 **Current Milestone:** M1 — Verified Core + TPM (MVP-1)
 **Status:** In Progress (M0 complete 2026-10-03, except the Go-repo freeze notice)
+**Next (2026-10-04):** security-hardening P1 (HARD-01..04) → tag `v0.1.0-beta.1` (beta-release) → extract `ctap-wire` / `ctap-authenticator` (ctap-crates)
 
 ## MVP slices
 
@@ -12,7 +13,7 @@ Each MVP is a usable, demoable cut of a milestone. Later milestones harden and w
 | MVP-0 | M0 | Green `cargo xtask ci` with real proofs (Verus, Kani) and fuzzing | done |
 | MVP-1 (code complete, hardware E2E pending) | M1 | Register and sign in on webauthn.io with fingerprint, keys enforced by TPM policy, on any TPM 2.0 + fprintd laptop | makeCredential/getAssertion over uhid; broker + agent; fprintd UV + presence; non-discoverable credentials; no PIN, no hmac-secret in the protocol (the TPM side lands in M1 but is wired in MVP-2) |
 | MVP-2 (done; real-fprintd E2E pending) | M1 + M2 | Discoverable passkeys, PIN, hmac-secret/PRF, and `systemd-cryptenroll`/`pam_u2f` working | clientPIN v2, credMgmt, hmac-secret, credProtect; compat matrix |
-| MVP-3 (in progress) | M3 | Installable from COPR/AUR/PPA with distro-neutral units and polkit | packaging + security review |
+| MVP-3 (in progress) | M3 | Installable from COPR/AUR/PPA with distro-neutral units and polkit; signed beta on GitHub Releases | packaging + security review; `v0.1.0-beta.1` gated on hardening P1 |
 | MVP-4 | M4 | Works through credentialsd/portal and has a management UI | provider API + UI |
 
 
@@ -125,10 +126,21 @@ Each MVP is a usable, demoable cut of a milestone. Later milestones harden and w
 **Packaging** - IN PROGRESS (`xtask dist`, PKGBUILD, Fedora spec, debian/ written; not yet built in clean chroots)
 
 - Upstream binary releases: GoReleaser `.deb`/`.rpm`/Arch packages + git-cliff notes on `v*` tags (AD-016) — DONE
+- Sigstore keyless signatures (`.sigstore.json`) + SLSA build provenance on every release asset (AD-017) — DONE (branch `release/v0.1.0-beta.1`, first real run pending)
+
+**Beta release v0.1.0-beta.1** - IN PROGRESS (spec: `.specs/features/beta-release/`)
+
+- Release engineering done; push, fork rehearsal, tag and publish remain (B6–B12); gated on security-hardening P1
 
 - Debian: debcargo-friendly deps; file an ITP; upload missing crates (or avoid them)
 - Fedora: spec plus COPR, then a review request; Arch: PKGBUILD/AUR; openSUSE OBS
 - Distro-neutral polkit actions (`<id>.credential.create/reset/manage`, auth_self_keep), udev rule, systemd units, man pages
+
+**Security hardening (internal review 2026-10-04)** - PLANNED (spec: `.specs/features/security-hardening/`)
+
+- P1 (beta blockers): cross-user session isolation, fprintd D-Bus activation, PIN-retry restore on non-PIN errors, UV/PIN blocks in the gesture path
+- P2: DA budget across reset, crash-safe PIN rotation, silent-probe oracle, hmac-secret omission, lazy provisioning, `/dev/uhid` least privilege
+- P3: 11 robustness/hygiene items
 
 **Security review** - PLANNED
 
@@ -159,4 +171,4 @@ Each MVP is a usable, demoable cut of a milestone. Later milestones harden and w
 - Native PAM module with broker re-validation (authd/SSSD)
 - largeBlob, minPinLength, enterprise attestation
 - TPM-less fallback (software keystore + secure enclave alternatives) for machines without a TPM
-- Upstream the verified CTAPHID/CBOR crates for reuse by credentialsd/libwebauthn
+- ~~Upstream the verified CTAPHID/CBOR crates for reuse by credentialsd/libwebauthn~~ → promoted to feature **Standalone CTAP crates** (`ctap-wire` + `ctap-authenticator`, spec: `.specs/features/ctap-crates/`, AD-018): no existing crate fits (survey 2026-10-04)

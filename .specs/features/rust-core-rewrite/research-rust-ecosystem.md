@@ -65,3 +65,25 @@ Client-side (NOT authenticator) libs, for reference/testing only: Mozilla `authe
 ## Recommendation (from research)
 
 Don't build another standalone uhid authenticator. Build a **credentialsd-compatible platform authenticator / provider backend in Rust** (TPM key wrapping + pluggable UV: fprintd, PIN, future), exposing a D-Bus API aligned with credentialsd #8/#26. Engage maintainers before freezing API. Keep uhid as compatibility transport (works today for browsers, libfido2, pam_u2f, systemd-cryptenroll) — noting Chromium `plat: true` limitation. Distro path: upstream into credentialsd or separate package (e.g. `credentialsd-tpm-provider`) built from already-packaged crates.
+
+---
+
+## Addendum 2026-10-04: authenticator-side CTAP 2.1 crates re-survey
+
+Checked against the crates.io API and upstream sources. Version numbers above are still current; three corrections:
+
+1. **passkey-authenticator (passkey-rs 0.6.0) can't serve as the CTAP2 core.** Its `Ctap2Command` covers makeCredential, getAssertion and getInfo only — no clientPin, no credentialManagement.
+2. **soft-fido2 / soft-fido2-ctap (0.17.0)** is the closest feature match (2.0 + clientPin v1/v2, credMgmt) but its licensing is copyleft and inconsistent (LICENSE file AGPL-3.0, README GPL-3.0) — unusable under AD-004. Also missed before: **fidorium** 0.1.6 (TPM + uhid, user presence only, no PIN/UV), keyroost-ctap, passless-uhid (AGPL), passkey-crypto 0.1.1.
+3. Pre-releases exist: ctap-types 0.6.0-rc.5, fido-authenticator 0.4.0-rc.3 (still Trussed/firmware-bound).
+
+| Crate | Side | CTAP 2.1 (clientPin v2 / credMgmt / hmac-secret) | License | Fit |
+|---|---|---|---|---|
+| passkey-authenticator 0.6.0 | authenticator | no / no / yes | MIT/Apache | subset only |
+| ctap-types 0.5.0 | types | yes / yes / yes | Apache/MIT | types only, serde decoding unverified |
+| fido-authenticator 0.3.0 | authenticator | yes / yes / yes | Apache/MIT | needs Trussed runtime |
+| soft-fido2-ctap 0.17.0 | both | yes / yes / ? | AGPL/GPL | license |
+| fidorium 0.1.6 | TPM daemon | no / no / no | MIT/Apache | binary, UP only |
+| uhid-virt 0.0.8 | uhid | — | MIT/Apache | usable for transport-uhid |
+| minicbor 2.3 / cbor4ii 1.2.3 / ciborium 0.2.2 | CBOR | — | BlueOak / MIT / Apache | generic; canonical CTAP ordering not enforced; ciborium stagnant |
+
+**Conclusion:** no permissive, std-host, authenticator-side CTAP 2.1 engine exists → publish our own (AD-018, `.specs/features/ctap-crates/`). Names `ctap-authenticator`, `ctap-wire`, `ctap21`, `ctap-core` were free on 2026-10-04.

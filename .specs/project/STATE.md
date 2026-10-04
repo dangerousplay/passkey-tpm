@@ -1,7 +1,7 @@
 # State
 
-**Last Updated:** 2026-10-03
-**Current Work:** VM test bed green on Ubuntu 24.04 (38 pytest scenarios, real fprintd via libfprint's virtual device, swtpm); next: more scenarios (browser over uhid, pam_u2f, cryptenroll, SRK variants) and the distro matrix.
+**Last Updated:** 2026-10-04
+**Current Work:** Beta `v0.1.0-beta.1` prepared on branch `release/v0.1.0-beta.1` (Sigstore-signed packages, dependency upgrade; not pushed). Next: security-hardening P1 (HARD-01..04, `.specs/features/security-hardening/`), then tag the beta (`.specs/features/beta-release/` B6–B12), then extract the CTAP crates (`.specs/features/ctap-crates/`, starts with Discuss C-G1..C-G5).
 
 ---
 
@@ -117,6 +117,26 @@
 **Trade-off:** Binary packages target Ubuntu 24.04 library names (deb) and glibc ≥ 2.39; they're a convenience channel, not a replacement for distro packaging (M3). git-cliff runs `--offline` without `GITHUB_TOKEN`.
 **Impact:** `.goreleaser.yaml`, `cliff.toml`, `packaging/nfpm/`, `xtask` tasks `changelog` and `release`; end-user `README.md`, developer docs in `CONTRIBUTING.md`.
 
+### AD-017: Keyless Sigstore signing + build provenance for release assets (2026-10-04)
+
+**Decision:** GoReleaser signs every package and `checksums.txt` with `cosign sign-blob --bundle` (keyless, the release workflow's GitHub OIDC identity; `.sigstore.json` bundles on the release). `actions/attest-build-provenance` records SLSA provenance for every file in `checksums.txt`. Local/PR snapshots run with `--skip=publish,sign`. cosign v3.1.3 via `sigstore/cosign-installer` v4.1.2, actions pinned by SHA.
+**Reason:** Users can check origin and integrity (`cosign verify-blob`, `gh attestation verify`) without the project holding a long-lived signing key.
+**Trade-off:** No native dpkg/rpm/pacman signatures and no signed repository metadata; package managers don't verify Sigstore bundles themselves. Revisit with COPR/PPA/AUR (M3).
+**Impact:** `.goreleaser.yaml` `signs:`, `release.yml` permissions `id-token`/`attestations`, `packaging/README.md` verification section. Arch packages need `epoch: "0"` to keep the pre-release suffix (L-010).
+
+### AD-018: Publish the CTAP engine and codecs as standalone crates (2026-10-04) — PROPOSED
+
+**Decision:** Extract `ctap-authenticator` (engine, Verus) and `ctap-wire` (codecs, Kani + fuzz) from `core`/`wire` and publish them on crates.io; passkey-tpm keeps `credid`/`gatestore` and the TPM backend. Names, vstd strategy, MSRV, CTAPHID placement and timing are open (ctap-crates C-G1..C-G5).
+**Reason:** Ecosystem survey 2026-10-04: passkey-authenticator lacks clientPin/credMgmt; ctap-types/fido-authenticator are Trussed/firmware-bound; soft-fido2 is AGPL/GPL with inconsistent licensing; fidorium has no PIN/UV. No permissive std-host CTAP 2.1 authenticator engine exists. This also settles ADR-004 (ctap-types vs passkey-types): neither is adopted.
+**Trade-off:** A public API to maintain; the exact `vstd` pin is hostile to downstream users unless made optional (B-003).
+**Impact:** `.specs/features/ctap-crates/`; supersedes the "reuse ecosystem types" part of AD-003.
+
+### AD-019: Dependency upgrade policy — latest stable, no pre-releases (2026-10-04)
+
+**Decision:** Direct dependencies track the latest stable release (moved to sha2 0.11, hmac/hkdf 0.13, p256 0.14, aes 0.9, cbc 0.2, getrandom 0.4, zeroize 1.9). Pre-releases are not adopted (tss-esapi stays 7.7 while 8.0 is alpha); `vstd` follows the Verus pin (AD-009).
+**Reason:** Security fixes land on the latest line; RustCrypto 0.10/0.12 is in maintenance.
+**Impact:** `pin_protocol` uses cipher 0.5 block-mode traits, hybrid-array keys and `ToSec1Point`; `KeyInit::new_from_slice` for HMAC.
+
 ---
 
 ## Active Blockers
@@ -142,7 +162,14 @@
 **Discovered:** 2026-10-03
 **Impact:** Medium for distro packaging (G4). `vstd` and `verus_builtin*` are not in Debian or Fedora.
 **Workaround:** None yet.
-**Resolution:** Investigate making `vstd` optional, with ghost code erased via a cfg (`verus_only`) and exec code compiled without the macro. Otherwise package `vstd` for Debian. Decide before M3.
+**Resolution:** Investigate making `vstd` optional, with ghost code erased via a cfg (`verus_only`) and exec code compiled without the macro. Otherwise package `vstd` for Debian. Decide before M3. Spike scheduled as ctap-crates A1 (also required for publishing).
+
+### B-004: Beta tag gated on security-hardening P1
+
+**Discovered:** 2026-10-04 (internal code review)
+**Impact:** High. The cross-user session issue (HARD-01) and fprintd activation (HARD-02) make the beta unsafe on shared machines / possibly unusable with fingerprints.
+**Workaround:** None; the branch `release/v0.1.0-beta.1` waits.
+**Resolution:** HARD-01..04 Verified (`.specs/features/security-hardening/` H1–H7), then beta-release B9–B12.
 
 ---
 
@@ -211,6 +238,13 @@
 **Solution:** pytest + pytest-testinfra (`tests/vm/e2e`, dependencies locked with uv): agents started with `subprocess.Popen(user=...)` (real PIDs), devices identified by diffing hidraw nodes, tests open a specific agent's device, and the broker's `request uid=` audit line proves which user each request ran as. JUnit + HTML reports come back over virtiofs.
 **Prevents:** False security findings, and missed ones.
 
+### L-010: nfpm drops the Arch pre-release suffix unless an epoch is set
+
+**Context:** First `v0.1.0-beta.1` snapshot: deb/rpm were `0.1.0~beta.1`, but the Arch package was `pkgver = 0.1.0-1`.
+**Problem:** nfpm's Arch packager only appends `Prerelease` inside its epoch branch; the beta would have looked like the final 0.1.0 and blocked the real upgrade.
+**Solution:** `epoch: "0"` in the GoReleaser Arch override (pacman's default, no other effect) → `0:0.1.0beta.1-1`; `vercmp` confirms it sorts before `0.1.0`.
+**Prevents:** Pre-releases that shadow final releases in pacman. Check package versions of every format on each new tag scheme.
+
 ---
 
 ## Quick Tasks Completed
@@ -226,7 +260,8 @@
 - [ ] FreeBSD/NetBSD port: transport (CUSE-based hidraw? libfido2-level integration? xdg-desktop-portal), tpm2-abrmd on FreeBSD, NetBSD TPM 2.0 support, rc.d/devd/pkgsrc packaging; publish core/wire as standalone crates for other authenticators — Captured during: portability review (AD-015)
 - [ ] Native PAM module with authd/SSSD broker re-validation — Captured during: init
 - [ ] Face UV provider once a production-grade stack exists (Howdy 3 still beta) — Captured during: init
-- [ ] Upstream the verified CTAPHID/CBOR crates to credentialsd/libwebauthn — Captured during: init
+- [x] Upstream the verified CTAPHID/CBOR crates to credentialsd/libwebauthn — promoted to feature ctap-crates (2026-10-04)
+- [ ] Propose clientPin/credMgmt types to passkey-types (1Password) — Captured during: crate survey 2026-10-04
 
 ---
 
@@ -245,12 +280,16 @@
 - [x] credMgmt RP-bound tokens may delete/update that RP's credentials (2026-10-03)
 - [x] Deleted discoverable credentials are revoked (revoked.v1 tag list, fail-closed) (2026-10-03)
 - [ ] Build packages in clean chroots (makepkg, mock/COPR, sbuild/PPA)
+- [x] Upgrade dependencies to latest stable (AD-019, 2026-10-04)
+- [x] Sigstore-signed release packages (AD-017, 2026-10-04)
+- [ ] Push `release/v0.1.0-beta.1` and rehearse the signed release on a fork (beta-release B6–B7)
+- [ ] Decide security-hardening gray areas G1–G4 and ctap-crates C-G1..C-G5
 - [ ] Hardware E2E with real fprintd: install packaging/udev rule (uaccess on /dev/uhid) + fprintd, run broker+agent, `scripts/e2e-fido2.sh`, then webauthn.io in Chromium and Firefox
 - [ ] Kani: the CBOR `build` loop is not proven (CBMC blow-up on recursive drop); consider an iterative builder or a Verus proof
 - [ ] CLI: `passkey-tpm tpm status` (DA warning, SRK state) using `health::da_status`
-- [ ] Broker startup: re-define the PIN NV index from the persisted new auth if missing (crash during `pin_gate::rotate`)
+- [ ] Broker startup: re-define the PIN NV index from the persisted new auth if missing (crash during `pin_gate::rotate`) → security-hardening H9 (HARD-06)
 - [ ] Trusted-prompt feasibility (broker-driven prompt vs credentialsd-ui)
-- [ ] ADR-004: ctap-types vs passkey-types (check Debian packaging status and canonical CBOR handling)
+- [x] ADR-004: ctap-types vs passkey-types — neither; publish our own (AD-018, 2026-10-04)
 - [ ] Contact linux-credentials maintainers
 - [ ] Re-check UNVERIFIED items in the research docs before design
 
