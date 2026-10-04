@@ -3,7 +3,9 @@
 //! Callers reach it over the system bus. The calling user is taken from the bus
 //! (`GetConnectionUnixUser`), never from request data, and every operation is confined to
 //! that user's credentials. Fingerprint verification runs here, against fprintd, for that
-//! user only; a [`UvEvidence`] is created only from fprintd's `verify-match`.
+//! user only; a [`UvEvidence`] is created only from fprintd's `verify-match`. Requests are
+//! served only while the calling user has an active session on a local seat
+//! ([`passkey_tpm_uv::seat`]).
 
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc, Mutex};
@@ -19,11 +21,15 @@ use tokio_util::sync::CancellationToken;
 use zbus::message::Header;
 use zbus::{fdo, interface, Connection};
 
+pub use passkey_tpm_uv::seat::{Logind, SessionPolicy};
+
 pub const BUS_NAME: &str = "io.github.dangerousplay.PasskeyTpm1";
 pub const OBJECT_PATH: &str = "/io/github/dangerousplay/PasskeyTpm1";
 /// CTAP status byte returned when the request is larger than maxMsgSize.
 const STATUS_INVALID_LENGTH: u8 = 0x03;
 const STATUS_OTHER: u8 = 0x7F;
+/// CTAP2_ERR_OPERATION_DENIED: the caller isn't the user at the seat.
+const STATUS_OPERATION_DENIED: u8 = 0x27;
 
 enum Job {
     Prepare {
@@ -139,6 +145,7 @@ pub struct Broker {
     worker: TpmWorker,
     fprintd: Connection,
     users: Box<dyn UserLookup>,
+    sessions: Box<dyn SessionPolicy>,
     verify_timeout: Duration,
     cancels: Arc<Mutex<HashMap<u32, (u64, CancellationToken)>>>,
     next_request: std::sync::atomic::AtomicU64,
@@ -153,18 +160,21 @@ impl std::fmt::Debug for Broker {
 }
 
 impl Broker {
-    /// `fprintd` is the (system) bus connection used to reach fprintd.
+    /// `fprintd` is the (system) bus connection used to reach fprintd; `sessions` decides
+    /// which users are at a seat (production: [`Logind`]).
     #[must_use]
     pub fn new(
         worker: TpmWorker,
         fprintd: Connection,
         users: Box<dyn UserLookup>,
+        sessions: Box<dyn SessionPolicy>,
         verify_timeout: Duration,
     ) -> Self {
         Self {
             worker,
             fprintd,
             users,
+            sessions,
             verify_timeout,
             cancels: Arc::default(),
             next_request: std::sync::atomic::AtomicU64::new(0),
@@ -266,6 +276,13 @@ impl Broker {
         request: Vec<u8>,
     ) -> fdo::Result<Vec<u8>> {
         let uid = Self::caller_uid(conn, &header).await?;
+        if !self.sessions.is_active(uid).await {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("denied uid={uid}: no active seat session");
+            }
+            return Ok(vec![STATUS_OPERATION_DENIED]);
+        }
         Ok(self.run(uid, request).await)
     }
 

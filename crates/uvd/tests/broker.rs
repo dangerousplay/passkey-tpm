@@ -8,7 +8,7 @@ use passkey_tpm_testkit::bus::PrivateBus;
 use passkey_tpm_testkit::swtpm::Swtpm;
 use passkey_tpm_tpm::adapter::TpmBackend;
 use passkey_tpm_uv::mock::{self, MockFprintd};
-use passkey_tpm_uvd::{serve, Broker, TpmWorker, UserLookup, BUS_NAME, OBJECT_PATH};
+use passkey_tpm_uvd::{serve, Broker, SessionPolicy, TpmWorker, UserLookup, BUS_NAME, OBJECT_PATH};
 use passkey_tpm_wire::cbor::{self, Value};
 use sha2::{Digest, Sha256};
 use tss_esapi::Context;
@@ -18,6 +18,17 @@ struct AlwaysAlice;
 impl UserLookup for AlwaysAlice {
     fn username(&self, _uid: u32) -> Option<String> {
         Some("alice".to_owned())
+    }
+}
+
+/// Session policy with a fixed answer (the logind client has its own tests).
+struct Seat(bool);
+impl SessionPolicy for Seat {
+    fn is_active<'a>(
+        &'a self,
+        _uid: u32,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>> {
+        Box::pin(std::future::ready(self.0))
     }
 }
 
@@ -43,6 +54,10 @@ fn suffix() -> u64 {
 }
 
 async fn fixture(mock_fprintd: MockFprintd) -> Fixture {
+    fixture_at_seat(mock_fprintd, true).await
+}
+
+async fn fixture_at_seat(mock_fprintd: MockFprintd, active: bool) -> Fixture {
     let tpm = Swtpm::start();
     let bus = PrivateBus::start();
     let fprintd = bus.connect().await;
@@ -63,6 +78,7 @@ async fn fixture(mock_fprintd: MockFprintd) -> Fixture {
         worker,
         broker_conn.clone(),
         Box::new(AlwaysAlice),
+        Box::new(Seat(active)),
         Duration::from_secs(5),
     );
     serve(&broker_conn, broker).await.expect("serve broker");
@@ -266,4 +282,20 @@ async fn users_without_fingerprints_are_told_uv_is_unavailable() {
         ctap(&f.client, &make_credential_request("a.example", &[1; 32])).await,
         vec![0x30]
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn user_without_an_active_seat_session_is_denied() {
+    // HARD-01: after a user switch, another user can open this user's hidraw node; the
+    // broker must not serve the (now background) user.
+    let f = fixture_at_seat(
+        MockFprintd::with_results(&[], Duration::from_millis(10)),
+        false,
+    )
+    .await;
+    let get_info = ctap(&f.client, &[0x04]).await;
+    assert_eq!(get_info, vec![0x27], "CTAP2_ERR_OPERATION_DENIED");
+    let cdh = [7u8; 32];
+    let make = ctap(&f.client, &make_credential_request("example.com", &cdh)).await;
+    assert_eq!(make, vec![0x27]);
 }
