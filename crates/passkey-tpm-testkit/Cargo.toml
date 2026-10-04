@@ -1,0 +1,15 @@
+[package]
+name = "passkey-tpm-testkit"
+description = "Test helpers for passkey-tpm: per-test swtpm and private dbus-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+tss-esapi = "7.7"
+zbus = { version = "5.19", default-features = false, features = ["tokio"] }
+
+[lints]
+workspace = true

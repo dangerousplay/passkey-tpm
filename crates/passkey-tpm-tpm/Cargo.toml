@@ -1,0 +1,28 @@
+[package]
+name = "passkey-tpm-tpm"
+description = "TPM 2.0 backend for passkey-tpm: policy-bound credential keys and gates"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+tss-esapi = "7.7"
+passkey-tpm-core = { path = "../passkey-tpm-core" }
+sha2 = "0.10"
+hmac = "0.12"
+zeroize = "1.8"
+getrandom = "0.3"
+argon2 = { version = "0.6", default-features = false, features = ["alloc", "zeroize"] }
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+passkey-tpm-wire = { path = "../passkey-tpm-wire" }
+
+[dev-dependencies]
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
+sha2 = "0.10"
+
+[lints]
+workspace = true
