@@ -111,11 +111,22 @@ all of *your* passkeys and your PIN; it doesn't affect other users.
 |---|---|
 | Browser says no security key found | `systemctl --user status passkey-tpm-agent`; `ls -l /dev/uhid` (the package loads the `uhid` module; reboot once after installing if it's missing) |
 | Fingerprint never accepted | `fprintd-verify` works? Enroll again with `fprintd-enroll` |
+| Not sure what's wrong | `passkey-tpm-cli info` checks the TPM, `/dev/uhid`, fprintd and both services |
 | "TPM not available" | `passkey-tpm-cli tpm status`; enable the TPM / fTPM / PTT in the firmware settings |
 | PIN locked or TPM lockout | wait for the TPM lockout to expire (usually minutes to hours), or reset the security key |
 
 Logs: `journalctl -u passkey-tpm-uvd` (system service) and
 `journalctl --user -u passkey-tpm-agent` (your session).
+
+### Reporting a problem or missing support
+
+`passkey-tpm-cli version` prints the installed version. `passkey-tpm-cli info` prints a
+system report (distribution, kernel, machine model, TPM, fingerprint reader, service state)
+without secrets or serial numbers; run it with `sudo` to include TPM vendor and lockout
+details. Paste it into a [new issue](https://github.com/dangerousplay/passkey-tpm/issues/new/choose):
+choose *Problem report* when something fails, or *Missing support* for an unsupported TPM,
+fingerprint reader, distribution or application. Report security vulnerabilities privately
+(see [SECURITY.md](SECURITY.md)).
 
 ## How it works and security
 

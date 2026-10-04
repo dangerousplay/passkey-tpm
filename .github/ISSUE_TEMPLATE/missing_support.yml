@@ -1,0 +1,57 @@
+name: Missing support
+description: Your TPM, fingerprint reader, distribution, browser or application isn't supported.
+labels: [support, triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Hardware and distribution reports help us decide what to support next. Reports that
+        something **works** on your machine are welcome too: pick "Works" below.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What is missing?
+      options:
+        - TPM (not detected, unsupported, errors)
+        - Fingerprint reader
+        - Linux distribution or packaging
+        - Browser or application
+        - Authentication method (e.g. face, smart card, PIN-only, presence without fingerprint)
+        - Works (hardware report)
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Details
+      description: |
+        Which device, distribution or application, and what you tried. For fingerprint readers,
+        include whether it works with `fprintd-enroll` / your login screen.
+    validations:
+      required: true
+  - type: textarea
+    id: info
+    attributes:
+      label: System information
+      description: |
+        Output of `sudo passkey-tpm-cli info` (or without sudo if you prefer; TPM details will
+        be missing). If passkey-tpm can't be installed, paste `cat /etc/os-release` and
+        `uname -r` instead.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Fingerprint reader / USB devices
+      description: |
+        For fingerprint readers, paste `lsusb` (the reader's `ID xxxx:yyyy` line is what
+        matters) and `fprintd-list "$USER"`.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: passkey-tpm version
+      description: Output of `passkey-tpm-cli version`, or "not installed".
+    validations:
+      required: true
