@@ -14,15 +14,15 @@ zbus = { version = "5.19", default-features = false, features = ["tokio"] }
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
 tokio-util = "0.7"
 nix = { version = "0.31", default-features = false, features = ["user"] }
-passkey-tpm-core = { path = "../passkey-tpm-core" }
-passkey-tpm-tpm = { path = "../passkey-tpm-tpm" }
-passkey-tpm-uv = { path = "../passkey-tpm-uv" }
+passkey-tpm-core = { path = "../core" }
+passkey-tpm-tpm = { path = "../tpm" }
+passkey-tpm-uv = { path = "../uv" }
 tss-esapi = "7.7"
 
 [dev-dependencies]
-passkey-tpm-testkit = { path = "../passkey-tpm-testkit" }
-passkey-tpm-uv = { path = "../passkey-tpm-uv", features = ["mock"] }
-passkey-tpm-wire = { path = "../passkey-tpm-wire" }
+passkey-tpm-testkit = { path = "../testkit" }
+passkey-tpm-uv = { path = "../uv", features = ["mock"] }
+passkey-tpm-wire = { path = "../wire" }
 p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
 sha2 = "0.10"
 

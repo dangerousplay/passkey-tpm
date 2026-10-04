@@ -10,7 +10,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-passkey-tpm-wire = { path = "../passkey-tpm-wire" }
+passkey-tpm-wire = { path = "../wire" }
 sha2 = "0.10"
 p256 = { version = "0.13", default-features = false, features = ["ecdh", "arithmetic", "std"] }
 aes = "0.8"

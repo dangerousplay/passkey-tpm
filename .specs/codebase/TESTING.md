@@ -7,11 +7,11 @@
 | Type | Tool | Location |
 |---|---|---|
 | unit | `cargo test` (+ proptest) | `#[cfg(test)]` modules, `crates/*/tests/` |
-| proof | Verus (pinned) | `crates/passkey-tpm-core/src/**` `verus!{}` blocks |
+| proof | Verus (pinned) | `crates/core/src/**` `verus!{}` blocks |
 | bounded proof | Kani (+ Bolero harness reused as fuzz target) | `#[cfg(kani)]` modules |
 | fuzz | cargo-fuzz (libFuzzer) | `fuzz/fuzz_targets/` |
-| integration-tpm | swtpm, one instance per test (socket TCTI) | `crates/passkey-tpm-tpm/tests/` |
-| integration-dbus | private `dbus-daemon --session` per test | `crates/passkey-tpm-uvd/tests/` |
+| integration-tpm | swtpm, one instance per test (socket TCTI) | `crates/tpm/tests/` |
+| integration-dbus | private `dbus-daemon --session` per test | `crates/uvd/tests/` |
 | hardware | real TPM / fprintd, `#[ignore]` + feature flag | run manually, results in `docs/compat.md` |
 | vm-e2e | pytest + pytest-testinfra in an mkosi VM (swtpm, libfprint virtual device), deps locked with uv | `tests/vm/e2e/`; `cargo xtask vm`; JUnit + HTML in `target/vm/report/`; nightly CI |
 

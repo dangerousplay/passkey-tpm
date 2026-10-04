@@ -11,14 +11,14 @@ publish = false
 
 [dependencies]
 tss-esapi = "7.7"
-passkey-tpm-core = { path = "../passkey-tpm-core" }
+passkey-tpm-core = { path = "../core" }
 sha2 = "0.10"
 hmac = "0.12"
 zeroize = "1.8"
 getrandom = "0.3"
 argon2 = { version = "0.6", default-features = false, features = ["alloc", "zeroize"] }
 p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
-passkey-tpm-wire = { path = "../passkey-tpm-wire" }
+passkey-tpm-wire = { path = "../wire" }
 
 [dev-dependencies]
 p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }

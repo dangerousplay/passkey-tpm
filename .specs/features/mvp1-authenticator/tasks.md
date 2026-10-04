@@ -46,15 +46,15 @@ Phase 3:
 
 | ID | What | Where | Req | Tests | Gate |
 |---|---|---|---|---|---|
-| T1 | CTAP2 CBOR subset decoder/encoder, canonical encoding, limits; Kani panic-freedom; fuzz target `cbor_decode` (decode→encode round-trip on canonical input) | `crates/passkey-tpm-wire/src/cbor.rs`, `fuzz/fuzz_targets/cbor_decode.rs` | MVP1-07, -13 | unit + bounded proof + fuzz | quick + proof |
-| T2 | CTAPHID report parsing, Assembler state machine with Verus invariants, fragmentation; fuzz target `ctaphid_assembler` | `crates/passkey-tpm-core/src/ctaphid.rs`, `fuzz/fuzz_targets/ctaphid_assembler.rs` | MVP1-08, -13 | unit + proof + fuzz | quick + proof |
-| T3 | fprintd client (`verify`, `has_enrolled`) with sender check and cancel; mock fprintd service (feature `mock`); tests on a private dbus-daemon | `crates/passkey-tpm-uv/` | MVP1-10 | integration-dbus | quick |
-| T4 | uhid device: create/destroy, event decode, input write, no `unsafe`; FIDO report descriptor | `crates/passkey-tpm-transport-uhid/` | MVP1-11 | unit (encoding) + ignored privileged test | quick |
+| T1 | CTAP2 CBOR subset decoder/encoder, canonical encoding, limits; Kani panic-freedom; fuzz target `cbor_decode` (decode→encode round-trip on canonical input) | `crates/wire/src/cbor.rs`, `fuzz/fuzz_targets/cbor_decode.rs` | MVP1-07, -13 | unit + bounded proof + fuzz | quick + proof |
+| T2 | CTAPHID report parsing, Assembler state machine with Verus invariants, fragmentation; fuzz target `ctaphid_assembler` | `crates/core/src/ctaphid.rs`, `fuzz/fuzz_targets/ctaphid_assembler.rs` | MVP1-08, -13 | unit + proof + fuzz | quick + proof |
+| T3 | fprintd client (`verify`, `has_enrolled`) with sender check and cancel; mock fprintd service (feature `mock`); tests on a private dbus-daemon | `crates/uv/` | MVP1-10 | integration-dbus | quick |
+| T4 | uhid device: create/destroy, event decode, input write, no `unsafe`; FIDO report descriptor | `crates/transport-uhid/` | MVP1-11 | unit (encoding) + ignored privileged test | quick |
 | T5 | systemd units, D-Bus policy, polkit rule, udev rule, sysusers/tmpfiles | `packaging/` | MVP1-12 | none | build |
 | T6 | credid v2 with 16-byte tag; gatestore `cred_mac_key`; tag compute/verify helpers | `wire/credid.rs`, `wire/gatestore.rs`, `tpm/gates.rs` | MVP1-03 | unit + bounded proof + fuzz | quick + proof |
 | T7 | `UvEvidence` + `auth_data` with Verus ensures on flags | `core/src/evidence.rs` | MVP1-05 | unit + proof | quick + proof |
 | T8 | `Authenticator` two-phase API; getInfo, makeCredential, getAssertion; packed self-attestation; `MockTpm` | `core/src/ctap2/` | MVP1-01..06 | unit | quick |
 | T9 | `TpmBackend: TpmOps` with lazy per-uid provisioning and persistence | `tpm/src/adapter.rs` | MVP1-09 | integration-tpm | quick |
-| T10 | Broker service + integration test (register → assert, wrong uid, cancel) | `crates/passkey-tpm-uvd/` | MVP1-09, -10 | integration-dbus + tpm | full |
-| T11 | Agent | `crates/passkey-tpm-agent/` | MVP1-08, -11 | unit + ignored privileged | quick |
+| T10 | Broker service + integration test (register → assert, wrong uid, cancel) | `crates/uvd/` | MVP1-09, -10 | integration-dbus + tpm | full |
+| T11 | Agent | `crates/agent/` | MVP1-08, -11 | unit + ignored privileged | quick |
 | T12 | E2E script + docs/compat.md row | `scripts/e2e-fido2.sh`, `docs/` | acceptance | hardware/manual | — |

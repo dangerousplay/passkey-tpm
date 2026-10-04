@@ -75,7 +75,7 @@ T9, T10, T11 → T12
 ### T2: Workspace lints and clippy policy
 
 **What:** `[workspace.lints]` in the root `Cargo.toml` (`clippy::all` deny, pedantic subset), `lints.workspace = true` in all crates, stricter `[lints]` and `#![forbid(unsafe_code)]` in `passkey-tpm-core`, `clippy.toml`.
-**Where:** `Cargo.toml`, `crates/*/Cargo.toml`, `crates/passkey-tpm-core/src/lib.rs`, `clippy.toml`
+**Where:** `Cargo.toml`, `crates/*/Cargo.toml`, `crates/core/src/lib.rs`, `clippy.toml`
 **Depends on:** T1
 **Requirement:** BOOT-04
 
@@ -124,7 +124,7 @@ T9, T10, T11 → T12
 ### T5: Verus pinning + `xtask verus` + trivial proof [P]
 
 **What:** `tools/verus.toml` (release tag, sha256, `vstd` exact version); `xtask verus` fetches or verifies the binary into `target/tools/` and runs it on `passkey-tpm-core`. A trivial verified function (e.g. a `saturating_dec` spec for PIN retries) in core.
-**Where:** `tools/verus.toml`, `xtask/src/tasks/verus.rs`, `crates/passkey-tpm-core/src/proofs/smoke.rs`
+**Where:** `tools/verus.toml`, `xtask/src/tasks/verus.rs`, `crates/core/src/proofs/smoke.rs`
 **Depends on:** T3
 **Requirement:** BOOT-07
 
@@ -141,7 +141,7 @@ T9, T10, T11 → T12
 ### T6: Kani pinning + `xtask kani` + trivial harness [P]
 
 **What:** Kani pinned version, `xtask kani` (installs `kani-verifier` at the pinned version, runs `cargo kani -p passkey-tpm-core`), a trivial Bolero/Kani harness.
-**Where:** `tools/kani.toml`, `xtask/src/tasks/kani.rs`, `crates/passkey-tpm-core/src/harness.rs`
+**Where:** `tools/kani.toml`, `xtask/src/tasks/kani.rs`, `crates/core/src/harness.rs`
 **Depends on:** T3
 **Requirement:** BOOT-08
 

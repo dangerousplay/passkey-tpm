@@ -5,7 +5,7 @@ use crate::runner::{cargo, exec, workspace_root, Result};
 use crate::tools::{tools_dir, Pin};
 
 /// Crates with `#[kani::proof]` harnesses.
-const PROVED_CRATES: &[&str] = &["crates/passkey-tpm-wire"];
+const PROVED_CRATES: &[&str] = &["crates/wire"];
 
 pub fn run(_args: &[String]) -> Result {
     let cargo_kani = install()?;

@@ -5,7 +5,7 @@ use crate::runner::{exec, workspace_root, Error, Result};
 use crate::tools::{fetch_verified, tools_dir, Pin};
 
 /// Crates whose `verus!` code is verified.
-const VERIFIED_CRATES: &[&str] = &["crates/passkey-tpm-core"];
+const VERIFIED_CRATES: &[&str] = &["crates/core"];
 
 pub fn run(_args: &[String]) -> Result {
     let bin_dir = install()?;

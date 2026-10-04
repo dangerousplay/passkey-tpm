@@ -93,7 +93,7 @@ T11, T12 → T16 [P] benchmark task
 ### T1: Core TPM-facing types and `TpmOps` trait [P]
 
 **What:** `GateKind {Pin, Uv, Up}`, `CredProtect`, `CredBlobs`, `Uid(u32)`, `RpIdHash([u8;32])`, `TpmError`, and the `TpmOps` trait (`create_credential`, `sign`, `hmac`, `change_pin`, `health`) as in design.md; a `MockTpm` for core tests.
-**Where:** `crates/passkey-tpm-core/src/tpm_iface.rs`
+**Where:** `crates/core/src/tpm_iface.rs`
 **Depends on:** None
 **Requirement:** TPM-02, TPM-05, TPM-07
 **Done when:**
@@ -107,7 +107,7 @@ T11, T12 → T16 [P] benchmark task
 ### T2: Credential ID v1 codec [P]
 
 **What:** `encode(&CredBlobs) -> Vec<u8>` / `decode(&[u8]) -> Result<CredBlobs>` per the design data model; reject trailing bytes, an unknown version and oversize input; ≤ 1023 B.
-**Where:** `crates/passkey-tpm-wire/src/credid.rs`, `fuzz/fuzz_targets/credid_decode.rs`
+**Where:** `crates/wire/src/credid.rs`, `fuzz/fuzz_targets/credid_decode.rs`
 **Depends on:** None
 **Requirement:** TPM-01, TPM-16
 **Done when:**
@@ -121,7 +121,7 @@ T11, T12 → T16 [P] benchmark task
 ### T3: Gate-store file codec (`gates.v1`) [P]
 
 **What:** Serialize/deserialize per-user gate state (UV/UP blobs + authValues, PIN NV handle, Argon2 salt, schema version); `Zeroizing` buffers for authValues; atomic write helper (temp + fsync + rename, 0600).
-**Where:** `crates/passkey-tpm-wire/src/gatestore.rs` (codec, pure), `crates/passkey-tpm-tpm/src/fsutil.rs` (atomic write)
+**Where:** `crates/wire/src/gatestore.rs` (codec, pure), `crates/tpm/src/fsutil.rs` (atomic write)
 **Depends on:** None
 **Requirement:** TPM-04, TPM-05, TPM-08
 **Done when:**
@@ -135,7 +135,7 @@ T11, T12 → T16 [P] benchmark task
 ### T4: swtpm test harness [P]
 
 **What:** Test helper that spawns `swtpm socket --tpm2` on a temp dir with free ports, runs startup, returns a `tss_esapi::Context` (TCTI `swtpm:`), and kills it on drop; `xtask test` checks for the `swtpm` binary and fails with an install hint.
-**Where:** `crates/passkey-tpm-tpm/tests/support/swtpm.rs`, `xtask/src/tasks/test.rs` (modify)
+**Where:** `crates/tpm/tests/support/swtpm.rs`, `xtask/src/tasks/test.rs` (modify)
 **Depends on:** None
 **Requirement:** (enables all integration-tpm tests)
 **Done when:**
@@ -148,7 +148,7 @@ T11, T12 → T16 [P] benchmark task
 ### T5: Software policy digest calculator [P]
 
 **What:** Pure functions: `policy_command_code(digest, cc)`, `policy_secret(digest, gate_name, policy_ref)`, `policy_or(branches)`, `policy_ref(tag, rp_id_hash)`, `credential_policy(gates, rp_id_hash, protect, cc)` (drops the UP branch for credProtect=3).
-**Where:** `crates/passkey-tpm-core/src/policy.rs`
+**Where:** `crates/core/src/policy.rs`
 **Depends on:** T1
 **Requirement:** TPM-02, TPM-06, TPM-12
 **Done when:**
@@ -161,7 +161,7 @@ T11, T12 → T16 [P] benchmark task
 ### T6: SRK provisioning + Name pinning [P]
 
 **What:** `srk::ensure(ctx) -> SrkInfo`: read 0x81000001; if absent, `create_primary` with the TCG ECC P-256 SRK template and `evict_control`; return its Name. `srk::check(ctx, pinned_name)`.
-**Where:** `crates/passkey-tpm-tpm/src/srk.rs`
+**Where:** `crates/tpm/src/srk.rs`
 **Depends on:** T4
 **Requirement:** TPM-11
 **Done when:**
@@ -174,7 +174,7 @@ T11, T12 → T16 [P] benchmark task
 ### T7: Minimal sys FFI: `NV_ChangeAuth`, DA parameters/status [P]
 
 **What:** Safe wrappers over `tss-esapi-sys` for `Esys_NV_ChangeAuth`, `Esys_DictionaryAttackParameters`, and the TPM_PT_PERMANENT `lockoutAuthSet` read (via `get_capability` if available in the safe API). The only `unsafe` in the crate, with `// SAFETY:` comments.
-**Where:** `crates/passkey-tpm-tpm/src/ffi.rs`
+**Where:** `crates/tpm/src/ffi.rs`
 **Depends on:** T4
 **Requirement:** TPM-09, TPM-14
 **Done when:**
@@ -188,7 +188,7 @@ T11, T12 → T16 [P] benchmark task
 ### T8: Salted parameter-encrypted policy session helper
 
 **What:** `session::policy(ctx, srk) -> AuthSession` (salted on the SRK, AES-128-CFB, encrypt+decrypt attributes) and `session::hmac(...)` for gate auth; flush on drop.
-**Where:** `crates/passkey-tpm-tpm/src/session.rs`
+**Where:** `crates/tpm/src/session.rs`
 **Depends on:** T6
 **Requirement:** TPM-10
 **Done when:**
@@ -201,7 +201,7 @@ T11, T12 → T16 [P] benchmark task
 ### T9: Per-user gate provisioning
 
 **What:** `gates::provision(ctx, uid) -> GateSet`: UV and UP keyedHash objects (`noDA`, 32-byte random authValue), and a PIN NV index (DA-protected, authPolicy permitting `NV_ChangeAuth` only through PolicyCommandCode + PolicyAuthValue); persisted via the T3 codec to `<state>/<uid>/gates.v1`.
-**Where:** `crates/passkey-tpm-tpm/src/gates.rs`
+**Where:** `crates/tpm/src/gates.rs`
 **Depends on:** T3, T7, T8
 **Requirement:** TPM-04, TPM-05, TPM-08
 **Done when:**
@@ -214,7 +214,7 @@ T11, T12 → T16 [P] benchmark task
 ### T10: `create_credential`
 
 **What:** Create the cred key (ECC P-256, userWithAuth clear, adminWithPolicy, authPolicy from T5) and optional hmac_uv/hmac_nouv keyedHash keys (sign, unrestricted, HMAC-SHA256, policies on `TPM2_HMAC`); return `CredBlobs` → T2 codec.
-**Where:** `crates/passkey-tpm-tpm/src/credential.rs`
+**Where:** `crates/tpm/src/credential.rs`
 **Depends on:** T2, T5, T9
 **Requirement:** TPM-01, TPM-02, TPM-07, TPM-12, TPM-16
 **Done when:**
@@ -227,7 +227,7 @@ T11, T12 → T16 [P] benchmark task
 ### T11: `sign` with gate branch + bypass tests
 
 **What:** The assertion flow from design.md (load, policy session, PolicyCommandCode, PolicySecret(gate[uid], policyRef), PolicyOR, Sign); `TpmOps::sign` impl.
-**Where:** `crates/passkey-tpm-tpm/src/sign.rs`, `crates/passkey-tpm-tpm/tests/bypass.rs`
+**Where:** `crates/tpm/src/sign.rs`, `crates/tpm/tests/bypass.rs`
 **Depends on:** T10
 **Requirement:** TPM-02, TPM-03, TPM-05, TPM-06, TPM-12
 **Done when:**
@@ -241,7 +241,7 @@ T11, T12 → T16 [P] benchmark task
 ### T12: hmac-secret via TPM2_HMAC
 
 **What:** `TpmOps::hmac(uid, blobs, rp_id_hash, with_uv, gate, salt)`: policy session on `CommandCode::Hmac`; output through an encrypted session.
-**Where:** `crates/passkey-tpm-tpm/src/hmac.rs`
+**Where:** `crates/tpm/src/hmac.rs`
 **Depends on:** T10
 **Requirement:** TPM-07
 **Done when:**
@@ -254,7 +254,7 @@ T11, T12 → T16 [P] benchmark task
 ### T13: `change_pin` [P]
 
 **What:** Argon2id(pinHash16, salt) → `NV_ChangeAuth` on the PIN gate via T7.
-**Where:** `crates/passkey-tpm-tpm/src/pin.rs`
+**Where:** `crates/tpm/src/pin.rs`
 **Depends on:** T11
 **Requirement:** TPM-08, TPM-09
 **Done when:**
@@ -268,7 +268,7 @@ T11, T12 → T16 [P] benchmark task
 ### T14: Health and reset detection [P]
 
 **What:** `TpmOps::health()`: SRK present + Name equals the pinned value → Ok; else `Reset`. Callers map it to CTAP errors (design error table).
-**Where:** `crates/passkey-tpm-tpm/src/health.rs`
+**Where:** `crates/tpm/src/health.rs`
 **Depends on:** T11
 **Requirement:** TPM-15
 **Done when:**
@@ -281,7 +281,7 @@ T11, T12 → T16 [P] benchmark task
 ### T15: DA status reporting and warning [P]
 
 **What:** Read lockoutAuthSet and the DA params; `passkey-tpm-cli tpm status` prints them; warn when lockoutAuth is empty; `tpm set-da` admin-only command (no implicit changes).
-**Where:** `crates/passkey-tpm-tpm/src/da.rs`, `crates/passkey-tpm-cli/src/tpm.rs`
+**Where:** `crates/tpm/src/da.rs`, `crates/cli/src/tpm.rs`
 **Depends on:** T7, T11
 **Requirement:** TPM-14
 **Done when:**
@@ -294,7 +294,7 @@ T11, T12 → T16 [P] benchmark task
 ### T16: TPM benchmark task [P]
 
 **What:** `cargo xtask bench-tpm [--device /dev/tpmrm0]`: N=50 register/sign/hmac runs reporting p50/p95; results template in `docs/compat.md`.
-**Where:** `xtask/src/tasks/bench_tpm.rs`, `crates/passkey-tpm-tpm/benches/assert.rs`, `docs/compat.md`
+**Where:** `xtask/src/tasks/bench_tpm.rs`, `crates/tpm/benches/assert.rs`, `docs/compat.md`
 **Depends on:** T11, T12
 **Requirement:** TPM-17
 **Done when:**
