@@ -79,12 +79,13 @@ pub fn changelog(args: &[String]) -> Result {
     exec(&mut cmd)
 }
 
-/// Arguments for GoReleaser: a local snapshot unless `--publish`; other arguments
-/// (e.g. `--release-notes FILE`) pass through.
+/// Arguments for GoReleaser: a local, unsigned snapshot unless `--publish` (which signs
+/// with keyless cosign and needs a CI OIDC token); other arguments (e.g.
+/// `--release-notes FILE`) pass through.
 fn goreleaser_args(args: &[String]) -> Vec<String> {
     let mut out = vec!["release".to_owned(), "--clean".to_owned()];
     if !args.iter().any(|a| a == "--publish") {
-        out.extend(["--snapshot".to_owned(), "--skip=publish".to_owned()]);
+        out.extend(["--snapshot".to_owned(), "--skip=publish,sign".to_owned()]);
     }
     out.extend(args.iter().filter(|a| *a != "--publish").cloned());
     out
@@ -105,7 +106,7 @@ mod tests {
     fn release_is_a_snapshot_unless_published() {
         assert_eq!(
             goreleaser_args(&[]),
-            s(&["release", "--clean", "--snapshot", "--skip=publish"])
+            s(&["release", "--clean", "--snapshot", "--skip=publish,sign"])
         );
         assert_eq!(
             goreleaser_args(&s(&["--publish", "--release-notes", "n.md"])),

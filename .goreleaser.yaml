@@ -80,6 +80,9 @@ nfpms:
           - polkit
           - systemd
       archlinux:
+        # nfpm only appends the pre-release (`0.1.0beta.1`, which pacman sorts before
+        # `0.1.0`) when an epoch is set; 0 is pacman's default, so this changes nothing else.
+        epoch: "0"
         contents:
           - src: target/pkgroot-arch/
             dst: /
@@ -99,6 +102,27 @@ checksum:
   name_template: checksums.txt
   extra_files:
     - glob: target/dist/passkey-tpm-*.tar.gz
+
+# Keyless Sigstore signatures: cosign gets a short-lived certificate for the release
+# workflow's GitHub OIDC identity and logs it in Rekor. Each package and the checksum
+# file (which covers the source tarball) get a `.sigstore.json` bundle. Snapshots skip
+# signing (`cargo xtask release` without --publish). Verify with:
+#   cosign verify-blob --bundle FILE.sigstore.json \
+#     --certificate-identity-regexp '^https://github.com/dangerousplay/passkey-tpm/\.github/workflows/release\.yml@refs/tags/v' \
+#     --certificate-oidc-issuer https://token.actions.githubusercontent.com FILE
+signs:
+  - id: packages
+    cmd: cosign
+    artifacts: package
+    signature: "${artifact}.sigstore.json"
+    args: [sign-blob, "--bundle=${signature}", "${artifact}", --yes]
+    output: true
+  - id: checksums
+    cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args: [sign-blob, "--bundle=${signature}", "${artifact}", --yes]
+    output: true
 
 release:
   github:

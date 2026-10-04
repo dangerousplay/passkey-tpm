@@ -40,3 +40,22 @@ the source tarball. `cargo xtask release` builds a snapshot into `target/gorelea
 tag publishes a draft GitHub release with notes from `cargo xtask changelog --latest`
 (git-cliff, [`cliff.toml`](../cliff.toml)). The `.deb` depends on Ubuntu 24.04 / Debian 13
 library names.
+
+### Verifying release packages
+
+Release packages are signed keylessly with [Sigstore](https://www.sigstore.dev/): every
+`.deb`, `.rpm`, `.pkg.tar.zst` and `checksums.txt` has a `.sigstore.json` bundle tying it to
+the release workflow of a `v*` tag, and GitHub keeps SLSA build provenance for every file in
+`checksums.txt`. Either check works:
+
+```sh
+cosign verify-blob --bundle passkey-tpm_0.1.0-beta.1_amd64.deb.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/dangerousplay/passkey-tpm/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  passkey-tpm_0.1.0-beta.1_amd64.deb
+
+gh attestation verify passkey-tpm_0.1.0-beta.1_amd64.deb --repo dangerousplay/passkey-tpm
+```
+
+Pre-release tags (`v0.1.0-beta.1`) produce versions that sort before the final release in
+every package manager: `0.1.0~beta.1` (dpkg, rpm) and `0.1.0beta.1` (pacman).
