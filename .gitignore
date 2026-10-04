@@ -4,3 +4,5 @@
 /fuzz/artifacts
 /fuzz/coverage
 **/*.rs.bk
+__pycache__/
+*.pyc
