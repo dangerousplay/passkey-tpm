@@ -124,6 +124,8 @@ Each MVP is a usable, demoable cut of a milestone. Later milestones harden and w
 
 **Packaging** - IN PROGRESS (`xtask dist`, PKGBUILD, Fedora spec, debian/ written; not yet built in clean chroots)
 
+- Upstream binary releases: GoReleaser `.deb`/`.rpm`/Arch packages + git-cliff notes on `v*` tags (AD-016) — DONE
+
 - Debian: debcargo-friendly deps; file an ITP; upload missing crates (or avoid them)
 - Fedora: spec plus COPR, then a review request; Arch: PKGBUILD/AUR; openSUSE OBS
 - Distro-neutral polkit actions (`<id>.credential.create/reset/manage`, auth_self_keep), udev rule, systemd units, man pages

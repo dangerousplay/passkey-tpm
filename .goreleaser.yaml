@@ -1,0 +1,114 @@
+# Upstream release artifacts: .deb, .rpm, Arch packages, a tarball and checksums,
+# published as a GitHub release. Distribution recipes (packaging/debian, the Fedora
+# spec, PKGBUILD) build from source instead; both install through `cargo xtask dist`.
+version: 2
+project_name: passkey-tpm
+dist: target/goreleaser
+
+before:
+  hooks:
+    - rm -rf target/pkgroot target/pkgroot-arch target/dist
+    # Release build + FHS tree (Debian/Ubuntu and Fedora layout).
+    - cargo xtask dist --destdir target/pkgroot
+    # Arch keeps helper binaries in /usr/lib/<pkg>.
+    - cargo xtask dist --no-build --destdir target/pkgroot-arch --libexecdir /usr/lib
+    # Plain tarball of the same tree.
+    - cargo xtask dist --no-build
+    # The CLI comes from the Rust build below (it gives the packages their architecture);
+    # drop the trees' copy so nfpm doesn't see the file twice.
+    - rm -f target/pkgroot/usr/bin/passkey-tpm-cli target/pkgroot-arch/usr/bin/passkey-tpm-cli
+
+# The broker and agent are built by the hooks above. The CLI is built here with the Rust
+# builder (plain cargo, native target) so the packages carry the right architecture;
+# nfpm adds the staged trees.
+builds:
+  - id: cli
+    builder: rust
+    tool: cargo
+    command: build
+    dir: .
+    binary: passkey-tpm-cli
+    targets: [x86_64-unknown-linux-gnu]
+    flags: [--release, --locked, --package=passkey-tpm-cli]
+
+archives:
+  - formats: [none]
+
+nfpms:
+  - id: passkey-tpm
+    package_name: passkey-tpm
+    ids: [cli]
+    bindir: /usr/bin
+    file_name_template: "{{ .PackageName }}_{{ .Version }}_{{ .Arch }}"
+    formats: [deb, rpm, archlinux]
+    vendor: passkey-tpm
+    homepage: https://github.com/dangerousplay/passkey-tpm
+    maintainer: Davi Henrique <dangerousplay715@gmail.com>
+    description: |-
+      TPM-backed passkeys (FIDO2/WebAuthn) for Linux, unlocked with your fingerprint or a PIN.
+      Credentials are bound to this machine's TPM 2.0; a privileged broker holds the TPM
+      policy secrets and a per-user agent provides a virtual security key to browsers.
+    license: MIT OR Apache-2.0
+    section: admin
+    priority: optional
+    contents:
+      - src: target/pkgroot/
+        dst: /
+        type: tree
+    scripts:
+      postinstall: packaging/nfpm/postinstall.sh
+      preremove: packaging/nfpm/preremove.sh
+      postremove: packaging/nfpm/postremove.sh
+    overrides:
+      deb:
+        dependencies:
+          - libtss2-esys-3.0.2-0t64
+          - libtss2-tctildr0t64
+          - libtss2-mu-4.0.1-0t64
+          - libc6 (>= 2.39)
+          - fprintd
+          - dbus
+          - polkitd
+          - systemd
+        recommends:
+          - fido2-tools
+      rpm:
+        dependencies:
+          - tpm2-tss
+          - fprintd
+          - dbus
+          - polkit
+          - systemd
+      archlinux:
+        contents:
+          - src: target/pkgroot-arch/
+            dst: /
+            type: tree
+        dependencies:
+          - tpm2-tss
+          - fprintd
+          - dbus
+          - polkit
+          - systemd
+    rpm:
+      summary: TPM-backed passkeys for Linux with fingerprint or PIN
+    archlinux:
+      packager: Davi Henrique <dangerousplay715@gmail.com>
+
+checksum:
+  name_template: checksums.txt
+  extra_files:
+    - glob: target/dist/passkey-tpm-*.tar.gz
+
+release:
+  github:
+    owner: dangerousplay
+    name: passkey-tpm
+  draft: true
+  prerelease: auto
+  extra_files:
+    - glob: target/dist/passkey-tpm-*.tar.gz
+
+# Release notes come from git-cliff (cliff.toml), passed with --release-notes.
+changelog:
+  disable: true

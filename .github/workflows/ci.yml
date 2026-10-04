@@ -32,6 +32,7 @@ jobs:
           - step: test
           - step: verus
           - step: portability
+          - step: release # GoReleaser snapshot: .deb/.rpm/Arch packages build
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -47,6 +48,6 @@ jobs:
           key: ${{ matrix.step }}-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'tools/*.toml', '**/Cargo.lock') }}
           restore-keys: ${{ matrix.step }}-${{ runner.os }}-
       - name: Install TPM libraries and swtpm
-        if: matrix.step == 'clippy' || matrix.step == 'test'
+        if: matrix.step == 'clippy' || matrix.step == 'test' || matrix.step == 'release'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libtss2-dev pkg-config swtpm
       - run: cargo xtask ${{ matrix.step }} ${{ matrix.args }}

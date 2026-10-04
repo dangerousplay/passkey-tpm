@@ -110,6 +110,13 @@
 **Reason:** The verified CTAP core is the most reusable asset and ports for free. The blocker on BSD is the transport: there is no userspace HID-device creation like Linux uhid (CUSE on FreeBSD is unverified). FreeBSD also has no in-kernel TPM resource manager (tpm2-abrmd needed); NetBSD's TPM 2.0 and tpm2-tss support are uncertain. BSD desktop users are a small share of the audience.
 **Impact:** One extra fast CI step (a few seconds). A BSD port is a deferred idea.
 
+### AD-016: Upstream release artifacts with GoReleaser + git-cliff (2026-10-04)
+
+**Decision:** A `v*` tag runs `.github/workflows/release.yml`: the fast gate, `cargo xtask changelog --latest` (git-cliff, GitHub-linked notes from Conventional Commits) and `cargo xtask release --publish` (GoReleaser OSS: Rust builder for the CLI, nfpm `.deb`/`.rpm`/Arch packages of the `cargo xtask dist` tree, checksums, source tarball, draft GitHub release). Both tools are pinned and checksum-verified in `tools/` like the other tools. CI builds a snapshot on every PR (`release` gate step). `CHANGELOG.md` is generated, never hand-edited.
+**Reason:** One declarative file replaces per-format packaging scripts in CI; the same commands run locally. `cargo xtask dist` stays the single install layout, so GoReleaser packages and distro recipes (debian/, spec, PKGBUILD) can't drift. The `prebuilt` builder is Pro-only, hence a real Rust build of the CLI to give nfpm an architecture.
+**Trade-off:** Binary packages target Ubuntu 24.04 library names (deb) and glibc ≥ 2.39; they're a convenience channel, not a replacement for distro packaging (M3). git-cliff runs `--offline` without `GITHUB_TOKEN`.
+**Impact:** `.goreleaser.yaml`, `cliff.toml`, `packaging/nfpm/`, `xtask` tasks `changelog` and `release`; end-user `README.md`, developer docs in `CONTRIBUTING.md`.
+
 ---
 
 ## Active Blockers

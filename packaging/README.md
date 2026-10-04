@@ -31,3 +31,12 @@ ships the same files:
 | Debian / Ubuntu PPA | `packaging/debian/` (copy to `debian/`) | cargo build; an archive upload would use debcargo-packaged crates |
 
 `cargo xtask dist` (no `--destdir`) writes `target/dist/passkey-tpm-<version>.tar.gz`.
+
+## Upstream binary packages
+
+[`.goreleaser.yaml`](../.goreleaser.yaml) packages the same `cargo xtask dist` tree as `.deb`,
+`.rpm` and Arch packages with nfpm (install scripts in [`nfpm/`](nfpm/)), plus checksums and
+the source tarball. `cargo xtask release` builds a snapshot into `target/goreleaser/`; a `v*`
+tag publishes a draft GitHub release with notes from `cargo xtask changelog --latest`
+(git-cliff, [`cliff.toml`](../cliff.toml)). The `.deb` depends on Ubuntu 24.04 / Debian 13
+library names.

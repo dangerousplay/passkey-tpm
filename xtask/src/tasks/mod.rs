@@ -10,6 +10,7 @@ mod fmt;
 mod fuzz;
 mod kani;
 mod portability;
+mod release;
 mod test;
 mod verus;
 mod vm;
@@ -82,6 +83,16 @@ pub const TASKS: &[Task] = &[
         name: "vm",
         about: "E2E scenarios in an mkosi VM (swtpm + virtual fingerprint): [--no-build] [--timeout S]",
         run: vm::run,
+    },
+    Task {
+        name: "changelog",
+        about: "git-cliff: regenerate CHANGELOG.md; --latest prints the latest release notes",
+        run: release::changelog,
+    },
+    Task {
+        name: "release",
+        about: "GoReleaser: build .deb/.rpm/Arch packages locally (snapshot); --publish to release",
+        run: release::release,
     },
     Task {
         name: "build",

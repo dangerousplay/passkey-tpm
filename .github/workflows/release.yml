@@ -1,0 +1,39 @@
+name: release
+
+# Pushing a `v*` tag builds .deb/.rpm/Arch packages and a source tarball with GoReleaser
+# and publishes a draft GitHub release whose notes come from git-cliff. Both tools are
+# pinned and checksum-verified by `cargo xtask` (tools/*.toml), so `cargo xtask release`
+# reproduces this locally as a snapshot.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # create the GitHub release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # git-cliff and GoReleaser need the full history and tags
+          persist-credentials: false
+      - name: Install TPM libraries
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libtss2-dev pkg-config swtpm
+      - name: Gate
+        run: cargo xtask ci
+      - name: Release notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo xtask changelog --latest --output target/RELEASE_NOTES.md
+      - name: Build and publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo xtask release --publish --release-notes target/RELEASE_NOTES.md
