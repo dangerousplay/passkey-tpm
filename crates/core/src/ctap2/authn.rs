@@ -200,6 +200,29 @@ impl<T: TpmOps> Authenticator<T> {
             .map_err(super::common::map_tpm_error)
     }
 
+    /// Fails with `PIN_BLOCKED` once the persisted PIN retries reach 0 (AD-010).
+    pub(super) fn check_pin_not_blocked(&mut self, uid: Uid) -> Parsed<()> {
+        let retries = self
+            .tpm
+            .pin_retries(uid)
+            .map_err(super::common::map_tpm_error)?;
+        if retries == 0 {
+            return Err(status::PIN_BLOCKED);
+        }
+        Ok(())
+    }
+
+    /// Whether built-in UV (a fingerprint match) may be attempted: `UV_BLOCKED` after
+    /// [`MAX_UV_RETRIES`](super::common::MAX_UV_RETRIES) consecutive mismatches, and
+    /// `PIN_BLOCKED` when the PIN is blocked, which disables built-in UV too
+    /// (CTAP 2.1 §6.5.2.2, AD-010). Checked before any fingerprint prompt.
+    pub(super) fn check_builtin_uv(&mut self, uid: Uid) -> Parsed<()> {
+        if self.user(uid).uv_failures >= super::common::MAX_UV_RETRIES {
+            return Err(status::UV_BLOCKED);
+        }
+        self.check_pin_not_blocked(uid)
+    }
+
     /// Validates `pinUvAuthParam` over `message` for permission `perm` and relying party
     /// `rp` (CTAP 2.1 §6.1.2 steps 1–9 and §6.2.2). Binds an unbound token to `rp`.
     pub(super) fn verify_auth_param(

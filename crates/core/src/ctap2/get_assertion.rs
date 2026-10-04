@@ -57,7 +57,7 @@ impl<T: TpmOps> Authenticator<T> {
                 } else {
                     status::PIN_NOT_SET
                 };
-                return self.gesture(uid, user, rp_id, PendingKind::TouchThen(code));
+                return self.gesture(uid, user, rp_id, PendingKind::TouchThen(code), true);
             }
             Some(p) => {
                 let check = AuthCheck {
@@ -99,7 +99,14 @@ impl<T: TpmOps> Authenticator<T> {
                 self.finish_get_assertion(uid, request, UvEvidence::from_token(uid.0), now_ms)
                     .unwrap_or_else(super::common::error),
             )),
-            _ => self.gesture(uid, user, rp_id, PendingKind::GetAssertion(request)),
+            // PIN token without presence: the fingerprint only adds UP.
+            Some(Verification::Token {
+                user_present: false,
+            }) => self.gesture(uid, user, rp_id, PendingKind::GetAssertion(request), false),
+            // No token: the fingerprint gives UP and UV.
+            Some(Verification::Gesture) | None => {
+                self.gesture(uid, user, rp_id, PendingKind::GetAssertion(request), true)
+            }
         }
     }
 

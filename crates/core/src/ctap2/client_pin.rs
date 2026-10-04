@@ -303,13 +303,7 @@ impl<T: TpmOps> Authenticator<T> {
         if !user.uv_enrolled {
             return Err(status::NOT_ALLOWED);
         }
-        if self.user(uid).uv_failures >= MAX_UV_RETRIES {
-            return Err(status::UV_BLOCKED);
-        }
-        if self.tpm.pin_retries(uid).map_err(map_tpm_error)? == 0 {
-            // CTAP 2.1 §6.5.2.2: a blocked PIN disables built-in UV too (AD-010).
-            return Err(status::PIN_BLOCKED);
-        }
+        self.check_builtin_uv(uid)?;
         let (permissions, rp_id_hash) = Self::permissions(req)?;
         let shared = self.shared_secret(uid, req, protocol)?;
         let rp_id = opt_text(get(req, 10))?.unwrap_or("passkey-tpm").to_owned();

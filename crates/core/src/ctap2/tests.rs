@@ -4,7 +4,7 @@ use passkey_tpm_wire::cbor::{self, Value};
 use passkey_tpm_wire::credid::KeyBlobs;
 use proptest::prelude::*;
 
-use super::common::{cmd, get, get_text, int, sha256, status, text, AAGUID};
+use super::common::{cmd, get, get_text, int, sha256, status, text, AAGUID, MAX_UV_RETRIES};
 use super::{Authenticator, Step, UserInfo, UvOutcome};
 use crate::evidence::UvEvidence;
 use crate::gates::GateKind;
@@ -746,6 +746,104 @@ fn change_pin_invalidates_the_token() {
             &p.token_using_pin(b"654321", 0x03, Some(RP))
         ))[0],
         status::OK
+    );
+}
+
+#[test]
+fn failed_fingerprints_block_the_gesture_path() {
+    // HARD-04: the uvRetries limit applies to makeCredential/getAssertion too, not only to
+    // getPinUvAuthTokenUsingUv.
+    let mut a = auth();
+    let id = register(&mut a, vec![]);
+    let mc = req(cmd::MAKE_CREDENTIAL, mc_params(vec![]));
+    let ga = req(
+        cmd::GET_ASSERTION,
+        ga_params(Some(vec![descriptor(&id)]), vec![]),
+    );
+    for i in 0..MAX_UV_RETRIES {
+        let request = if i % 2 == 0 { &mc } else { &ga };
+        let p = need_uv(prep(&mut a, ALICE, request));
+        assert_eq!(
+            a.complete(p, UvOutcome::NoMatch, 1_000),
+            vec![status::OPERATION_DENIED]
+        );
+    }
+    assert_eq!(done(prep(&mut a, ALICE, &mc)), vec![status::UV_BLOCKED]);
+    assert_eq!(done(prep(&mut a, ALICE, &ga)), vec![status::UV_BLOCKED]);
+    let touch_select = req(
+        cmd::MAKE_CREDENTIAL,
+        mc_params(vec![
+            (int(8), Value::Bytes(Vec::new())),
+            (int(9), Value::Uint(2)),
+        ]),
+    );
+    assert_eq!(
+        done(prep(&mut a, ALICE, &touch_select)),
+        vec![status::UV_BLOCKED]
+    );
+    let p = Platform::new(&mut a, ALICE, Protocol::Two);
+    assert_eq!(
+        done(prep(&mut a, ALICE, &p.token_using_uv(0x03, RP))),
+        vec![status::UV_BLOCKED]
+    );
+
+    // The PIN stays a fallback: its UV is not the fingerprint's, only presence is asked.
+    set_pin(&mut a, ALICE, Protocol::Two);
+    let p = Platform::new(&mut a, ALICE, Protocol::Two);
+    let token = p.decrypt_token(&done(prep(
+        &mut a,
+        ALICE,
+        &p.token_using_pin(PIN, 0x03, Some(RP)),
+    )));
+    let with_pin = req(
+        cmd::MAKE_CREDENTIAL,
+        mc_params(vec![
+            (int(8), p.auth_param(&token, &[9; 32])),
+            (int(9), Value::Uint(2)),
+        ]),
+    );
+    let step = prep(&mut a, ALICE, &with_pin);
+    let resp = body(&touch(&mut a, ALICE, step));
+    assert_eq!(get(&resp, 1), Some(&text("packed")));
+    // That match ended the run of failures.
+    assert!(matches!(prep(&mut a, ALICE, &ga), Step::NeedUv(_)));
+}
+
+#[test]
+fn blocked_pin_blocks_the_gesture_path() {
+    // AD-010: at 0 PIN retries built-in UV is disabled everywhere until reset.
+    let mut a = auth();
+    let id = register(&mut a, vec![]);
+    set_pin(&mut a, ALICE, Protocol::Two);
+    let p = Platform::new(&mut a, ALICE, Protocol::Two);
+    let token = p.decrypt_token(&done(prep(
+        &mut a,
+        ALICE,
+        &p.token_using_pin(PIN, 0x03, Some(RP)),
+    )));
+    a.tpm_mut().retries.insert(ALICE.0, 0);
+    let mc = req(cmd::MAKE_CREDENTIAL, mc_params(vec![]));
+    let ga = req(
+        cmd::GET_ASSERTION,
+        ga_params(Some(vec![descriptor(&id)]), vec![]),
+    );
+    assert_eq!(done(prep(&mut a, ALICE, &mc)), vec![status::PIN_BLOCKED]);
+    assert_eq!(done(prep(&mut a, ALICE, &ga)), vec![status::PIN_BLOCKED]);
+    let with_token = req(
+        cmd::MAKE_CREDENTIAL,
+        mc_params(vec![
+            (int(8), p.auth_param(&token, &[9; 32])),
+            (int(9), Value::Uint(2)),
+        ]),
+    );
+    assert_eq!(
+        done(prep(&mut a, ALICE, &with_token)),
+        vec![status::PIN_BLOCKED],
+        "a token issued before the block can't be completed with a fingerprint either"
+    );
+    assert!(
+        matches!(prep(&mut a, BOB, &mc), Step::NeedUv(_)),
+        "per user"
     );
 }
 
