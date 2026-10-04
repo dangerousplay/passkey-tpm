@@ -1189,6 +1189,36 @@ fn rp_bound_cm_token_manages_only_that_rps_credentials() {
 }
 
 #[test]
+fn cred_mgmt_checks_the_auth_param_before_looking_up_the_credential() {
+    let mut a = auth();
+    let rk = (int(7), Value::Map(vec![(text("rk"), Value::Bool(true))]));
+    let id = register(&mut a, vec![rk]);
+    set_pin(&mut a, ALICE, Protocol::Two);
+    let p = Platform::new(&mut a, ALICE, Protocol::Two);
+    let token = cm_token(&mut a, &p);
+    let wrong = [0x55; 32];
+    let unknown = vec![9; 41];
+    let user = Value::Map(vec![(text("id"), Value::Bytes(vec![7; 16]))]);
+    for cred in [&id, &unknown] {
+        let delete = Value::Map(vec![(int(2), descriptor(cred))]);
+        let update = Value::Map(vec![(int(2), descriptor(cred)), (int(3), user.clone())]);
+        for (sub, params) in [(6, delete), (7, update)] {
+            assert_eq!(
+                done(prep(&mut a, ALICE, &cm(&p, &wrong, sub, Some(params)))),
+                vec![status::PIN_AUTH_INVALID],
+                "a bad pinUvAuthParam must not reveal whether the credential exists"
+            );
+        }
+    }
+    let delete = Value::Map(vec![(int(2), descriptor(&unknown))]);
+    assert_eq!(
+        done(prep(&mut a, ALICE, &cm(&p, &token, 6, Some(delete)))),
+        vec![status::NO_CREDENTIALS],
+        "after a valid param the lookup still runs"
+    );
+}
+
+#[test]
 fn reset_wipes_only_the_callers_state_and_selection_needs_a_touch() {
     let mut a = auth();
     let id = register(&mut a, vec![]);

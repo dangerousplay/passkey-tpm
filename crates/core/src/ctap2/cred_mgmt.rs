@@ -87,6 +87,9 @@ impl<T: TpmOps> Authenticator<T> {
                 Some(RpIdHash(bytes32(sub_params.and_then(|p| get(p, 1)))?))
             }
             sub::DELETE_CREDENTIAL | sub::UPDATE_USER_INFORMATION => {
+                // Authenticate before the lookup so NO_CREDENTIALS is no oracle for an
+                // unauthenticated caller (HARD-14); the RP scope is checked below.
+                self.verify_auth_mac(uid, protocol, param, &message)?;
                 let id = sub_params
                     .and_then(|p| get(p, 2))
                     .and_then(|d| get_text(d, "id"))

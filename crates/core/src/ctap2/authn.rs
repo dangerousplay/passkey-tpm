@@ -223,6 +223,30 @@ impl<T: TpmOps> Authenticator<T> {
         self.check_pin_not_blocked(uid)
     }
 
+    /// Checks only that `param` is a valid MAC over `message` under the current token, with
+    /// no permission or RP check. Lets a command authenticate the caller before a lookup
+    /// whose result it must not reveal to an unauthenticated one (HARD-14);
+    /// [`verify_auth_param`](Self::verify_auth_param) must still run afterwards.
+    pub(super) fn verify_auth_mac(
+        &mut self,
+        uid: Uid,
+        protocol: Option<u64>,
+        param: &[u8],
+        message: &[u8],
+    ) -> Parsed<()> {
+        let protocol = protocol.ok_or(status::MISSING_PARAMETER)?;
+        let protocol = Protocol::from_u64(protocol).ok_or(status::INVALID_PARAMETER)?;
+        let Some(issued) = self.user(uid).token.as_ref() else {
+            return Err(status::PIN_AUTH_INVALID);
+        };
+        if issued.protocol != protocol
+            || !pin_protocol::verify_with_token(protocol, issued.token.secret(), message, param)
+        {
+            return Err(status::PIN_AUTH_INVALID);
+        }
+        Ok(())
+    }
+
     /// Validates `pinUvAuthParam` over `message` for permission `perm` and relying party
     /// `rp` (CTAP 2.1 §6.1.2 steps 1–9 and §6.2.2). Binds an unbound token to `rp`.
     pub(super) fn verify_auth_param(
@@ -238,17 +262,10 @@ impl<T: TpmOps> Authenticator<T> {
             perm,
             rp,
         } = *check;
-        let protocol = protocol.ok_or(status::MISSING_PARAMETER)?;
-        let protocol = Protocol::from_u64(protocol).ok_or(status::INVALID_PARAMETER)?;
-        let state = self.user(uid);
-        let Some(issued) = state.token.as_mut() else {
+        self.verify_auth_mac(uid, protocol, param, message)?;
+        let Some(issued) = self.user(uid).token.as_mut() else {
             return Err(status::PIN_AUTH_INVALID);
         };
-        if issued.protocol != protocol
-            || !pin_protocol::verify_with_token(protocol, issued.token.secret(), message, param)
-        {
-            return Err(status::PIN_AUTH_INVALID);
-        }
         let grant = &mut issued.token.grant;
         let permitted = match rp {
             Some(rp) => grant.allows(perm, &rp.0, now_ms),
