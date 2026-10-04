@@ -1,12 +1,15 @@
+%global upstream_version 0.1.0-beta.1
+
 Name:           passkey-tpm
-Version:        0.1.0
+# "~" sorts the pre-release before the final 0.1.0.
+Version:        0.1.0~beta.1
 Release:        1%{?dist}
 Summary:        TPM-backed passkeys (FIDO2/WebAuthn) for Linux
 License:        MIT OR Apache-2.0
 URL:            https://github.com/dangerousplay/passkey-tpm
-Source0:        %{url}/archive/v%{version}/%{name}-%{version}.tar.gz
+Source0:        %{url}/archive/v%{upstream_version}/%{name}-%{upstream_version}.tar.gz
 # COPR builds vendor crates (rust2rpm -V); a Fedora review would use system crates instead.
-Source1:        %{name}-%{version}-vendor.tar.xz
+Source1:        %{name}-%{upstream_version}-vendor.tar.xz
 Source2:        passkey-tpm.sysusers
 
 BuildRequires:  cargo-rpm-macros >= 24
@@ -23,7 +26,7 @@ machine's TPM 2.0 and unlocked with fingerprint or PIN. A privileged broker hold
 TPM policy secrets; a per-user agent exposes a virtual security key.
 
 %prep
-%autosetup -n %{name}-%{version} -a1
+%autosetup -n %{name}-%{upstream_version} -a1
 %cargo_prep -v vendor
 
 %build
@@ -66,5 +69,8 @@ cargo run --offline -q -p xtask -- dist --no-build --destdir %{buildroot} --pref
 %{_modulesloaddir}/passkey-tpm.conf
 
 %changelog
+* Sun Oct 04 2026 Davi Henrique <dangerousplay715@gmail.com> - 0.1.0~beta.1-1
+- First beta
+
 * Sat Oct 03 2026 Davi Henrique <dangerousplay715@gmail.com> - 0.1.0-1
 - Initial package

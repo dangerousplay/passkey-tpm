@@ -1,6 +1,7 @@
 # Maintainer: Davi Henrique <dangerousplay715@gmail.com>
 pkgname=passkey-tpm
-pkgver=0.1.0
+pkgver=0.1.0beta1
+_tag=0.1.0-beta.1 # upstream version; pkgver drops the "-" Arch forbids
 pkgrel=1
 pkgdesc="TPM-backed passkeys (FIDO2/WebAuthn) for Linux, unlocked with fingerprint or PIN"
 arch=('x86_64' 'aarch64')
@@ -9,30 +10,30 @@ license=('MIT OR Apache-2.0')
 depends=('tpm2-tss' 'fprintd' 'dbus' 'polkit' 'systemd' 'gcc-libs' 'glibc')
 makedepends=('cargo')
 optdepends=('libfido2: fido2-token diagnostics')
-source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+source=("$pkgname-$_tag.tar.gz::$url/archive/refs/tags/v$_tag.tar.gz")
 sha256sums=('SKIP')
 
 prepare() {
-  cd "$pkgname-$pkgver"
+  cd "$pkgname-$_tag"
   export RUSTUP_TOOLCHAIN=stable
   cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
 }
 
 build() {
-  cd "$pkgname-$pkgver"
+  cd "$pkgname-$_tag"
   export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
   cargo build --frozen --release -p passkey-tpm-uvd -p passkey-tpm-agent -p passkey-tpm-cli
 }
 
 check() {
-  cd "$pkgname-$pkgver"
+  cd "$pkgname-$_tag"
   export RUSTUP_TOOLCHAIN=stable
   # Unit tests only; TPM integration tests need swtpm.
   cargo test --frozen -p passkey-tpm-core -p passkey-tpm-wire -p passkey-tpm-agent
 }
 
 package() {
-  cd "$pkgname-$pkgver"
+  cd "$pkgname-$_tag"
   export RUSTUP_TOOLCHAIN=stable
   # Arch keeps helper binaries in /usr/lib/<pkg> rather than /usr/libexec.
   cargo run --frozen -q -p xtask -- dist --no-build --destdir "$pkgdir" --libexecdir /usr/lib
