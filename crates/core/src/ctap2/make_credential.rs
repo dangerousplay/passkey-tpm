@@ -107,7 +107,7 @@ impl<T: TpmOps> Authenticator<T> {
                 } else {
                     status::PIN_NOT_SET
                 };
-                return self.gesture(uid, user, rp_id, PendingKind::TouchThen(code));
+                return self.gesture(uid, user, rp_id, PendingKind::TouchThen(code), true);
             }
             Some(p) => {
                 let check = AuthCheck {
@@ -156,26 +156,43 @@ impl<T: TpmOps> Authenticator<T> {
                 self.finish_make_credential(uid, request, UvEvidence::from_token(uid.0))
                     .unwrap_or_else(super::common::error),
             )),
-            // UV via the token (PIN) but presence still needed; or no token at all.
+            // UV via the token (PIN) but presence still needed.
             Verification::Token {
                 user_present: false,
-            }
-            | Verification::Gesture => {
-                self.gesture(uid, user, rp_id, PendingKind::MakeCredential(request))
+            } => self.gesture(
+                uid,
+                user,
+                rp_id,
+                PendingKind::MakeCredential(request),
+                false,
+            ),
+            // No token at all: the fingerprint gives UP and UV.
+            Verification::Gesture => {
+                self.gesture(uid, user, rp_id, PendingKind::MakeCredential(request), true)
             }
         }
     }
 
+    /// Asks the broker for a fingerprint match. `fingerprint_uv`: the match is the request's
+    /// UV, so the uvRetries limit applies; otherwise a PIN token already gave UV and the
+    /// match only proves presence (the PIN stays a fallback for blocked UV). A blocked PIN
+    /// stops both (HARD-04, AD-010).
     pub(super) fn gesture(
         &mut self,
         uid: Uid,
         user: UserInfo,
         rp_id: &str,
         kind: PendingKind,
+        fingerprint_uv: bool,
     ) -> Parsed<Step> {
         if !user.uv_enrolled {
             // Presence is a fingerprint touch; without a reader no gesture is possible (MVP-2).
             return Err(status::NOT_ALLOWED);
+        }
+        if fingerprint_uv {
+            self.check_builtin_uv(uid)?;
+        } else {
+            self.check_pin_not_blocked(uid)?;
         }
         Ok(Step::NeedUv(Box::new(Pending {
             uid,
