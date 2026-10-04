@@ -3,7 +3,7 @@
 **Spec:** `.specs/features/security-hardening/spec.md`
 **Design:** inline per task (fixes are local); G1–G4 decisions go to `context.md` in this folder
 **Testing:** `.specs/codebase/TESTING.md`
-**Status:** Phase 1 done; phase 3 H14/H15/H17/H18/H20/H21/H23 done (2026-10-04); H8/H9/H11/H12/H22 in progress; H10/H13/H16 wait on G2–G4; H19, H24 open
+**Status:** Phase 1 done; H8, H9, H11, H12, H14, H15, H17, H18, H20–H23 done (2026-10-04); H10/H13/H16 wait on G2–G4; H19, H24 open
 
 Rule for every task: re-confirm the finding by writing the failing regression test first. If the test passes on unmodified code, mark the requirement "Not reproducible" with the evidence and skip the fix.
 
@@ -27,8 +27,15 @@ Rule for every task: re-confirm the finding by writing the failing regression te
 | H23 | ✅ | 16318cf | `TpmWorker::closed()`; uvd exits non-zero when the worker ends |
 | H21 | ✅ | 9728472 | CLI refuses `user remove` while the broker name has an owner (`--force` to override); D-Bus activation window remains |
 
+| H11 | ✅ | 3412e96 | core skips the HMAC for credentials without hmac-secret keys (ED clear, no output); new swtpm-backed core test `crates/tpm/tests/ctap.rs` |
+| H12 | ✅ | afa2a49 | only create_credential/change_pin provision; read-only calls answer as for an unregistered user; partial provisioning undefines what it created |
+| H9 | ✅ | d7c68b1 | begin → persist pending (gates.v1 version 2 while pending) → redefine → clear; repair on load; fault-injected at all 5 steps |
+| H8 | ✅ | 8899b1f | per-uid wrong-PIN ledger in `<state>/da/<uid>` that survives reset; budget = min(8, maxTries − 1), forgiven at the TPM recovery interval |
+| H22 | ✅ | f151e62 | never deletes a pre-existing temp file; dir-fsync failure no longer triggers cleanup |
+
 Gate after phase 1: `cargo xtask ci` green, 226 tests (217 before), Verus 103 verified / 0 errors.
 Gate after H14–H23 batch: 240 tests, Verus 103 / 0 (fresh run).
+Gate after H8–H22 batch (merged): 254 tests, Verus 103 / 0 (fresh), VM 41/41 (isolation gate test updated for lazy provisioning).
 
 ## Execution Plan
 

@@ -1,7 +1,7 @@
 # State
 
 **Last Updated:** 2026-10-04
-**Current Work:** Branch `release/v0.1.0-beta.1` (not pushed): Sigstore-signed packages, dependency upgrade, and security-hardening P1 (HARD-01..04) done and verified. Next: push + fork rehearsal + tag the beta (`.specs/features/beta-release/` B6–B12); hardening phases 2–3 (G2–G4 open); then the CTAP crates (`.specs/features/ctap-crates/`, Discuss C-G1..C-G5).
+**Current Work:** Branch `release/v0.1.0-beta.1` (not pushed): Sigstore-signed packages, dependency upgrade, and 17 of 21 security-hardening requirements (all P1) done and verified (254 tests, Verus 103/0, VM 41/41). Next: push + fork rehearsal + tag the beta (`.specs/features/beta-release/` B6–B12); hardening phases 2–3 (G2–G4 open); then the CTAP crates (`.specs/features/ctap-crates/`, Discuss C-G1..C-G5).
 
 ---
 
@@ -75,7 +75,7 @@
 
 **Decision:** `pin_gate::rotate` checks the old PIN with a trial-session PolicySecret (DA-counted), then undefines the NV index and defines it again with the same public area and the new authValue.
 **Reason:** tss-esapi 7.7 keeps its raw ESYS context private, so `NV_ChangeAuth` would need a second raw context and a hand-built policy session over FFI. Verified on swtpm: the Name is byte-identical, the old PIN fails with `TPM_RC_AUTH_FAIL`, and the policy digest is unchanged.
-**Trade-off:** The index doesn't exist for a moment during rotation. The broker must persist the new auth first and re-define on startup if the index is missing. Requires Owner hierarchy authorisation (empty by default), the same as provisioning.
+**Trade-off:** The index doesn't exist for a moment during rotation. The broker must persist the new auth first and re-define on startup if the index is missing (implemented 2026-10-04: gates.v1 version 2 carries a pending rotation, repaired on load — HARD-06). Requires Owner hierarchy authorisation (empty by default), the same as provisioning.
 **Impact:** The `passkey-tpm-tpm` crate has no `unsafe`. tpm-policy-model T7 is replaced; T13 uses `pin_gate::rotate`.
 
 ### AD-012: MVP-1 protocol cut (2026-10-03)
@@ -291,7 +291,7 @@
 - [ ] Hardware E2E with real fprintd: install packaging/udev rule (uaccess on /dev/uhid) + fprintd, run broker+agent, `scripts/e2e-fido2.sh`, then webauthn.io in Chromium and Firefox
 - [ ] Kani: the CBOR `build` loop is not proven (CBMC blow-up on recursive drop); consider an iterative builder or a Verus proof
 - [ ] CLI: `passkey-tpm tpm status` (DA warning, SRK state) using `health::da_status`
-- [ ] Broker startup: re-define the PIN NV index from the persisted new auth if missing (crash during `pin_gate::rotate`) → security-hardening H9 (HARD-06)
+- [x] Broker startup: re-define the PIN NV index from the persisted new auth if missing → done by security-hardening H9 (pending-rotation marker, 2026-10-04)
 - [ ] Trusted-prompt feasibility (broker-driven prompt vs credentialsd-ui)
 - [x] ADR-004: ctap-types vs passkey-types — neither; publish our own (AD-018, 2026-10-04)
 - [ ] Contact linux-credentials maintainers

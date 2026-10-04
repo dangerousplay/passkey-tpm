@@ -1,7 +1,7 @@
 # Security Hardening (code review 2026-10-04) — Specification
 
 **Size:** Large (multi-component: agent, broker, core, tpm, packaging)
-**Status:** P1 done (HARD-01..04 Verified 2026-10-04); G1 decided (context.md). G2–G4 open for phases 2–3.
+**Status:** 17 of 21 Verified (2026-10-04). Open: HARD-07 (G2), HARD-10 (G4), HARD-13 (G3), HARD-16 (PinRetries); HARD-21 (PKGBUILD checksum) is done at tag time.
 **Source:** read-only code review of `main` @ a81da2f, 2026-10-04. The two High findings (F1 session isolation, F3 fprintd activation) were re-checked against the code; the rest must be re-confirmed at the start of their task (write the failing test first).
 
 ## Problem Statement
@@ -114,11 +114,11 @@ The review found a cross-user path on multi-seat / fast-user-switching machines,
 | HARD-02 | fprintd activation | P1 | F3 | Execute | Verified (integration-dbus) |
 | HARD-03 | Retry restore on non-PIN errors | P1 | F4 | Execute | Verified (unit + Verus) |
 | HARD-04 | UV/PIN-blocked in gesture path | P1 | F6 | Execute | Verified (unit + Verus) |
-| HARD-05 | DA budget across reset | P2 | F5 | Tasks | Pending |
-| HARD-06 | Crash-safe PIN rotation | P2 | F7 | Tasks | Pending |
+| HARD-05 | DA budget across reset | P2 | F5 | Execute | Verified (integration-tpm, DA maxTries 3 and 32) |
+| HARD-06 | Crash-safe PIN rotation | P2 | F7 | Execute | Verified (integration-tpm fault injection after each step) |
 | HARD-07 | up=false probe oracle | P2 | F8 | Tasks (G2) | Pending |
-| HARD-08 | hmac-secret on non-hmac credential | P2 | F9 | Tasks | Pending |
-| HARD-09 | Lazy provisioning + cleanup | P2 | F10 | Tasks | Pending |
+| HARD-08 | hmac-secret on non-hmac credential | P2 | F9 | Execute | Verified (integration-tpm + unit) |
+| HARD-09 | Lazy provisioning + cleanup | P2 | F10 | Execute | Verified (integration-tpm + VM) |
 | HARD-10 | `/dev/uhid` least privilege | P2 | F2 | Design (G4) | Pending |
 | HARD-11 | CTAPHID INIT handling | P3 | F11 | Execute | Verified (unit) |
 | HARD-12 | Early cancel | P3 | F12 | Execute | Verified (integration-dbus) |
@@ -128,7 +128,7 @@ The review found a cross-user path on multi-seat / fast-user-switching machines,
 | HARD-16 | Use verified `PinRetries` | P3 | F16 | Tasks | Pending |
 | HARD-17 | Zeroize secrets | P3 | F17 | Execute | Verified (unit (type-pinned)) |
 | HARD-18 | CLI user remove vs cache | P3 | F18 | Execute | Verified (unit + private bus) |
-| HARD-19 | fsutil temp cleanup | P3 | F19 | Tasks | Pending |
+| HARD-19 | fsutil temp cleanup | P3 | F19 | Execute | Verified (unit) |
 | HARD-20 | uvd exits on worker death | P3 | F22 | Execute | Verified (unit) |
 | HARD-21 | PKGBUILD checksum | P3 | F21 | Tasks | Pending |
 

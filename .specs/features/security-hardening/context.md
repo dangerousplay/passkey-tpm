@@ -35,3 +35,20 @@ Still open. They're needed for phase 2/3 (H10a, H16, H13). The recommendations i
   - `uv_failures` stays in memory, so it resets when the broker restarts.
   - Reset and Selection (`need_gesture`) are unchanged: reset must stay reachable when the PIN is blocked.
 - **`MAX_UV_RETRIES` is 5** (`common.rs`), not 3 as the task text said.
+
+## H8: wrong-PIN budget (decided in implementation, 2026-10-04)
+
+**Choice:** a per-uid ledger of wrong-PIN failures in `<state>/da/<uid>`, kept outside the directory that `authenticatorReset` wipes. The other option was rate-limiting resets per uid.
+
+**How it works:**
+- One failure is charged before every PIN check that the TPM counts against its DA limit. It is refunded unless the TPM reports a wrong PIN.
+- The budget is `min(8, maxTries − 1)`, so one uid can never lock out the TPM-wide DA counter.
+- Failures are forgiven at the TPM's own recovery interval.
+- When the budget is spent, PIN checks return `Lockout` without reaching the TPM.
+- A corrupt ledger counts as spent.
+
+**Follow-ups:**
+- A recovery interval of 0 is read as "nothing forgiven". A uid that spends its budget stays blocked until an admin deletes its ledger.
+- A correct PIN doesn't reset the ledger, because it doesn't reset the TPM counter either. So `PIN_AUTH_BLOCKED` can appear before the CTAP retries reach 0.
+- `passkey-tpm user remove` doesn't delete the ledger. Harmless; keeping it is arguably right.
+- `TpmOps::hmac` still returns a plain `[u8; 32]`. Wrapping it in `Zeroizing` completes HARD-17.
