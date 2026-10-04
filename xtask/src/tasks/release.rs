@@ -1,4 +1,5 @@
-//! `cargo xtask changelog [--latest] [--output FILE]` and `cargo xtask release [--publish]`,
+//! `cargo xtask changelog [--latest] [--output FILE] [--tag-message FILE]` and
+//! `cargo xtask release [--publish]`,
 //! wrapping pinned git-cliff and GoReleaser binaries.
 
 use std::path::PathBuf;
@@ -61,6 +62,14 @@ fn cliff_args(args: &[String], has_token: bool) -> Result<Vec<String>> {
                     .next()
                     .ok_or_else(|| Error::Msg("--output needs a file".into()))?;
                 output = Some(file.clone());
+            }
+            "--tag-message" => {
+                let file = it
+                    .next()
+                    .ok_or_else(|| Error::Msg("--tag-message needs a file".into()))?;
+                let text = std::fs::read_to_string(file)
+                    .map_err(|e| Error::Msg(format!("cannot read {file}: {e}")))?;
+                out.extend(["--with-tag-message".to_owned(), text]);
             }
             other => return Err(Error::Msg(format!("unexpected argument `{other}`"))),
         }
@@ -130,6 +139,22 @@ mod tests {
                 "CHANGELOG.md"
             ])
         );
+    }
+
+    #[test]
+    fn tag_message_file_becomes_the_release_text() {
+        let file = std::env::temp_dir().join(format!("cliff-msg-{}", std::process::id()));
+        std::fs::write(&file, "Title\nBody").unwrap();
+        let args = cliff_args(
+            &s(&["--latest", "--tag-message", file.to_str().unwrap()]),
+            true,
+        )
+        .unwrap();
+        let _ = std::fs::remove_file(&file);
+        assert!(args
+            .windows(2)
+            .any(|w| w[0] == "--with-tag-message" && w[1] == "Title\nBody"));
+        assert!(cliff_args(&s(&["--tag-message", "/nonexistent"]), false).is_err());
     }
 
     #[test]

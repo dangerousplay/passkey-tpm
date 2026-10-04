@@ -1,6 +1,8 @@
 # git-cliff: changelog and GitHub release notes from conventional commits.
 #   cargo xtask changelog              regenerate CHANGELOG.md
 #   cargo xtask changelog --latest     notes for the latest tag (used by the release workflow)
+#   ... --tag-message FILE             text above the commit list (first line = title, dropped);
+#                                      the workflow uses .github/release-notes/<tag>.md if present
 # With GITHUB_TOKEN set, entries link PRs and authors and list first-time contributors.
 
 [remote.github]
@@ -26,6 +28,11 @@ body = """
 {% else -%}
 ## [Unreleased]
 {% endif %}
+{#- Release text: the tag message (or `--tag-message FILE` for the latest release) minus its
+    first line, which is the title. #}
+{%- if message %}{% set text = message | split(pat="\n") | slice(start=1) | join(sep="\n") | trim %}{% if text %}
+{{ text }}
+{% endif %}{% endif %}
 {%- for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | striptags | trim | upper_first }}
 {% for commit in commits %}

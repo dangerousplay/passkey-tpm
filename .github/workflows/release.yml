@@ -1,7 +1,8 @@
 name: release
 
 # Pushing a `v*` tag builds .deb/.rpm/Arch packages and a source tarball with GoReleaser
-# and publishes a draft GitHub release whose notes come from git-cliff. Both tools are
+# and publishes a draft GitHub release whose notes come from git-cliff (plus the optional
+# .github/release-notes/<tag>.md). Both tools are
 # pinned and checksum-verified by `cargo xtask` (tools/*.toml), so `cargo xtask release`
 # reproduces this locally as an unsigned snapshot. A tag with a pre-release suffix
 # (e.g. `v0.1.0-beta.1`) is marked as a pre-release.
@@ -43,11 +44,23 @@ jobs:
       - name: Release notes
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: cargo xtask changelog --latest --output target/RELEASE_NOTES.md
+          TAG: ${{ github.ref_name }}
+        # Optional per-release text (intro, known issues): .github/release-notes/<tag>.md.
+        run: |
+          args=()
+          if [[ -f ".github/release-notes/$TAG.md" ]]; then args=(--tag-message ".github/release-notes/$TAG.md"); fi
+          cargo xtask changelog --latest "${args[@]}" --output target/RELEASE_NOTES.md
       - name: Build, sign and publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: cargo xtask release --publish --release-notes target/RELEASE_NOTES.md
+        run: cargo xtask release --publish
+      # git-cliff owns the notes; GoReleaser's changelog is disabled, which also makes it
+      # ignore --release-notes, so the body is set here.
+      - name: Set release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file target/RELEASE_NOTES.md
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

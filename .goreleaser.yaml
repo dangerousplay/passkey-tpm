@@ -133,6 +133,8 @@ release:
   extra_files:
     - glob: target/dist/passkey-tpm-*.tar.gz
 
-# Release notes come from git-cliff (cliff.toml), passed with --release-notes.
+# Release notes come from git-cliff (cliff.toml); the release workflow sets them with
+# `gh release edit` after publishing. While the changelog is disabled GoReleaser ignores
+# --release-notes, so don't pass it.
 changelog:
   disable: true
