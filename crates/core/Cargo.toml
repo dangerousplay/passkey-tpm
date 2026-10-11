@@ -11,13 +11,13 @@ publish = false
 
 [dependencies]
 passkey-tpm-wire = { path = "../wire" }
-sha2 = "0.10"
-p256 = { version = "0.13", default-features = false, features = ["ecdh", "arithmetic", "std"] }
-aes = "0.8"
+sha2 = "0.11"
+p256 = { version = "0.14", default-features = false, features = ["ecdh", "arithmetic", "std"] }
+aes = "0.9"
 cbc = { version = "0.1", features = ["std"] }
-hkdf = "0.12"
-hmac = "0.12"
-getrandom = "0.3"
+hkdf = "0.13"
+hmac = "0.13"
+getrandom = "0.4"
 zeroize = "1.8"
 # Exact pin: must match the Verus release in tools/verus.toml.
 vstd = "=0.0.0-2026-09-20-0158"

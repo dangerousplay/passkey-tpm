@@ -23,8 +23,8 @@ tss-esapi = "7.7"
 passkey-tpm-testkit = { path = "../testkit" }
 passkey-tpm-uv = { path = "../uv", features = ["mock"] }
 passkey-tpm-wire = { path = "../wire" }
-p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
-sha2 = "0.10"
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
+sha2 = "0.11"
 
 [lints]
 workspace = true
