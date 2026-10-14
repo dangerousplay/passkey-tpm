@@ -370,6 +370,18 @@ impl Device {
         }
     }
 
+    /// fprintd's `name` property.
+    #[zbus(property, name = "name")]
+    fn name(&self) -> String {
+        "Mock fingerprint reader".to_owned()
+    }
+
+    /// fprintd's `scan-type` property.
+    #[zbus(property, name = "scan-type")]
+    fn scan_type(&self) -> String {
+        "press".to_owned()
+    }
+
     /// fprintd's `num-enroll-stages` property.
     #[zbus(property, name = "num-enroll-stages")]
     fn num_enroll_stages(&self) -> i32 {

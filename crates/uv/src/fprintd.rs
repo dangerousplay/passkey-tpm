@@ -529,13 +529,10 @@ pub async fn enrolled_fingers(conn: &Connection, username: &str) -> Result<Vec<S
 ///
 /// Returns a description if fprintd can't be reached or has no device.
 pub async fn device_description(conn: &Connection) -> Result<String, String> {
-    // fprintd is D-Bus activated and exits when idle; start it like fprintd-list does.
-    start_service(conn)
+    // fprintd is D-Bus activated and exits when idle; start it if nobody owns the name.
+    let owner = resolve_owner(conn)
         .await
         .map_err(|e| format!("fprintd is not installed or can't start: {e}"))?;
-    let owner = name_owner(conn)
-        .await
-        .map_err(|e| format!("GetNameOwner: {e}"))?;
     let device = default_device(conn, &owner)
         .await
         .map_err(|e| format!("GetDefaultDevice: {e}"))?;

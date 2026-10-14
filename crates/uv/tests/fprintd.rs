@@ -640,3 +640,13 @@ async fn spoofed_enroll_completed_is_ignored() {
     task.await.unwrap();
     assert_enroll_cleaned_up(&f);
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn device_description_reads_name_and_scan_type() {
+    // No .service file on this bus: fprintd is already running and must not be activated.
+    let f = fixture(MockFprintd::default()).await;
+    assert_eq!(
+        fprintd::device_description(&f.client).await.unwrap(),
+        "Mock fingerprint reader (press)"
+    );
+}
