@@ -140,6 +140,8 @@ fingerprint reader, distribution or application. Report security vulnerabilities
 
 ## How it works and security
 
+![passkey-tpm architecture](docs/diagrams/D01-passkey-tpm-architecture.svg)
+
 Each passkey is a key pair created inside the TPM. The TPM only signs with it after the
 background service proves that you verified (fingerprint or PIN) through a per-user secret
 that the TPM itself checks, so a bug or compromise in your session can't use your keys
@@ -154,7 +156,7 @@ Limitations you should know about:
 - Passkeys can't be backed up or moved. If the TPM is cleared or the motherboard replaced,
   they're gone, so always register a second sign-in method.
 
-Details: [threat model](docs/threat-model.md) and [TPM policy design](docs/adr/0003-tpm-policy-model.md).
+Details: [how it works, with diagrams](docs/architecture.md), [threat model](docs/threat-model.md) and [TPM policy design](docs/adr/0003-tpm-policy-model.md).
 
 ## Uninstall
 

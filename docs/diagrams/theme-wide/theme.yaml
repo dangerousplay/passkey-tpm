@@ -1,0 +1,3 @@
+# passkey-tpm documentation figures for wide, shallow diagrams (architecture, policy).
+extends: default
+canvas: {width: 2480, height: 820, background: white, margin: 80}

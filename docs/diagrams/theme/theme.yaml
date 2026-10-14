@@ -1,0 +1,3 @@
+# passkey-tpm documentation figures: the default theme on a wider canvas.
+extends: default
+canvas: {width: 2480, height: 1320, background: white, margin: 80}
