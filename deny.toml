@@ -26,6 +26,10 @@ allow = [
     "Unicode-3.0",
     "CC0-1.0",
 ]
+# Public-domain dedication; scoped to the crate that needs it (tray icon, AD-020).
+exceptions = [
+    { crate = "ksni", allow = ["Unlicense"] },
+]
 
 [bans]
 multiple-versions = "warn"
