@@ -56,6 +56,13 @@ struct Fixture {
     state: std::path::PathBuf,
 }
 
+impl Fixture {
+    /// Another client on the same bus.
+    async fn connect_other(&self) -> Connection {
+        self._bus.connect().await
+    }
+}
+
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.state);
@@ -342,4 +349,211 @@ async fn user_without_an_active_seat_session_is_denied() {
     let cdh = [7u8; 32];
     let make = ctap(&f.client, &make_credential_request("example.com", &cdh)).await;
     assert_eq!(make, vec![0x27]);
+}
+
+// ------------------------------------------- no fingerprint: PIN + presence (AD-022)
+
+use futures_util::StreamExt;
+use passkey_tpm_core::pin_protocol::{parse_platform_key, KeyAgreement, Protocol, SharedSecret};
+
+const PIN: &[u8] = b"1234";
+
+/// Platform side of PIN/UV auth protocol 2.
+struct Platform {
+    key: KeyAgreement,
+    shared: SharedSecret,
+}
+
+impl Platform {
+    async fn new(client: &Connection) -> Self {
+        let mut r = vec![0x06];
+        r.extend(cbor::encode(&Value::Map(vec![
+            (int(1), Value::Uint(2)),
+            (int(2), Value::Uint(2)),
+        ])));
+        let resp = body(&ctap(client, &r).await);
+        let auth_key = parse_platform_key(resp.map_get(&int(1)).expect("keyAgreement")).unwrap();
+        let key = KeyAgreement::generate().unwrap();
+        let shared = key.shared_secret(Protocol::Two, &auth_key).unwrap();
+        Self { key, shared }
+    }
+
+    fn client_pin(&self, sub: u64, extra: Vec<(Value, Value)>) -> Vec<u8> {
+        let mut m = vec![
+            (int(1), Value::Uint(2)),
+            (int(2), Value::Uint(sub)),
+            (int(3), self.key.cose_public()),
+        ];
+        m.extend(extra);
+        let mut r = vec![0x06];
+        r.extend(cbor::encode(&Value::Map(m)));
+        r
+    }
+
+    fn set_pin(&self) -> Vec<u8> {
+        let mut padded = PIN.to_vec();
+        padded.resize(64, 0);
+        let enc = self.shared.encrypt(&padded).unwrap();
+        let auth = self.shared.authenticate(&enc);
+        self.client_pin(
+            3,
+            vec![(int(4), Value::Bytes(auth)), (int(5), Value::Bytes(enc))],
+        )
+    }
+
+    fn token_request(&self, rp: &str) -> Vec<u8> {
+        let hash_enc = self.shared.encrypt(&sha256(&[PIN])[..16]).unwrap();
+        self.client_pin(
+            9,
+            vec![
+                (int(6), Value::Bytes(hash_enc)),
+                (int(9), Value::Uint(0x03)),
+                (int(10), text(rp)),
+            ],
+        )
+    }
+
+    fn token(&self, resp: &[u8]) -> [u8; 32] {
+        let enc = body(resp)
+            .map_get(&int(2))
+            .and_then(Value::as_bytes)
+            .unwrap()
+            .to_vec();
+        self.shared
+            .decrypt(&enc)
+            .unwrap()
+            .as_slice()
+            .try_into()
+            .unwrap()
+    }
+}
+
+fn pin_make_credential(rp: &str, cdh: &[u8; 32], token: &[u8; 32]) -> Vec<u8> {
+    let param = passkey_tpm_core::pin_protocol::authenticate_with_token(Protocol::Two, token, cdh);
+    let mut r = vec![0x01];
+    r.extend(cbor::encode(&Value::Map(vec![
+        (int(1), Value::Bytes(cdh.to_vec())),
+        (int(2), Value::Map(vec![(text("id"), text(rp))])),
+        (
+            int(3),
+            Value::Map(vec![
+                (text("id"), Value::Bytes(vec![1; 16])),
+                (text("name"), text("alice")),
+            ]),
+        ),
+        (
+            int(4),
+            Value::Array(vec![Value::Map(vec![
+                (text("alg"), int(-7)),
+                (text("type"), text("public-key")),
+            ])]),
+        ),
+        (int(8), Value::Bytes(param)),
+        (int(9), Value::Uint(2)),
+    ])));
+    r
+}
+
+/// Sets a PIN for the fingerprint-less user and returns a makeCredential with its token.
+async fn pin_only_request(f: &Fixture, rp: &str) -> Vec<u8> {
+    let p = Platform::new(&f.client).await;
+    assert_eq!(ctap(&f.client, &p.set_pin()).await, vec![0x00], "setPIN");
+    let p = Platform::new(&f.client).await;
+    let token = p.token(&ctap(&f.client, &p.token_request(rp)).await);
+    pin_make_credential(rp, &[3; 32], &token)
+}
+
+/// Stream of `PresenceRequested` signals delivered to `conn`.
+async fn presence_signals(conn: &Connection) -> zbus::MessageStream {
+    let rule = zbus::MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .interface(BUS_NAME)
+        .unwrap()
+        .member("PresenceRequested")
+        .unwrap()
+        .build();
+    zbus::MessageStream::for_match_rule(rule, conn, None)
+        .await
+        .unwrap()
+}
+
+async fn confirm(conn: &Connection, id: u64, allow: bool) -> zbus::Result<()> {
+    conn.call_method(
+        Some(BUS_NAME),
+        OBJECT_PATH,
+        Some(BUS_NAME),
+        "ConfirmPresence",
+        &(id, allow),
+    )
+    .await
+    .map(|_| ())
+}
+
+/// Answers the next presence request on `f.client` with `allow`, after checking that another
+/// connection can't answer it. Returns the prompt.
+fn answer_presence(f: &Fixture, other: Connection, allow: bool) -> tokio::task::JoinHandle<String> {
+    let client = f.client.clone();
+    tokio::spawn(async move {
+        let mut signals = presence_signals(&client).await;
+        let msg = signals.next().await.unwrap().unwrap();
+        let (id, prompt): (u64, String) = msg.body().deserialize().unwrap();
+        let err = confirm(&other, id, true).await.unwrap_err();
+        assert!(
+            matches!(&err, zbus::Error::MethodError(name, _, _) if name.as_str() == "org.freedesktop.DBus.Error.AccessDenied"),
+            "{err}"
+        );
+        confirm(&client, id, allow).await.unwrap();
+        prompt
+    })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn user_without_fingerprints_registers_with_pin_and_presence() {
+    let f = fixture(MockFprintd::default().without_enrolled()).await;
+    let request = pin_only_request(&f, "pin.example").await;
+    let other = f.connect_other().await;
+    // The presence task subscribes before the request is sent.
+    let answer = answer_presence(&f, other, true);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let resp = body(&ctap(&f.client, &request).await);
+    assert_eq!(answer.await.unwrap(), "pin.example");
+    let auth_data = resp.map_get(&int(2)).and_then(Value::as_bytes).unwrap();
+    assert_eq!(auth_data[32], 0x45, "UP + UV + AT");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn denied_presence_registers_nothing() {
+    let f = fixture(MockFprintd::default().without_enrolled()).await;
+    let request = pin_only_request(&f, "pin.example").await;
+    let other = f.connect_other().await;
+    let answer = answer_presence(&f, other, false);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        ctap(&f.client, &request).await,
+        vec![0x27],
+        "OPERATION_DENIED"
+    );
+    answer.await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn cancel_ends_a_pending_presence_request() {
+    let f = fixture(MockFprintd::default().without_enrolled()).await;
+    let request = pin_only_request(&f, "pin.example").await;
+    let client = f.client.clone();
+    let canceller = tokio::spawn(async move {
+        let mut signals = presence_signals(&client).await;
+        let _ = signals.next().await;
+        client
+            .call_method(Some(BUS_NAME), OBJECT_PATH, Some(BUS_NAME), "Cancel", &())
+            .await
+            .unwrap();
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(
+        ctap(&f.client, &request).await,
+        vec![0x2D],
+        "KEEPALIVE_CANCEL"
+    );
+    canceller.await.unwrap();
 }

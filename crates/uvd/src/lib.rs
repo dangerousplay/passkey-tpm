@@ -6,6 +6,11 @@
 //! user only; a [`UvEvidence`] is created only from fprintd's `verify-match`. Requests are
 //! served only while the calling user has an active session on a local seat
 //! ([`passkey_tpm_uv::seat`]).
+//!
+//! Users without an enrolled fingerprint confirm presence instead (AD-022): the broker
+//! sends a `PresenceRequested(id, prompt)` signal to the connection that made the `Ctap`
+//! call and waits for `ConfirmPresence(id, allow)` from that same connection. Any front-end
+//! (the agent today) can serve it; presence never replaces a fingerprint the core asked for.
 
 use std::collections::HashMap;
 use std::sync::{mpsc, Arc, Mutex};
@@ -19,6 +24,9 @@ use passkey_tpm_uv::fprintd::{self, UvResult};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use zbus::message::Header;
+use zbus::names::BusName;
+use zbus::object_server::SignalEmitter;
+use zbus::zvariant::ObjectPath;
 use zbus::{fdo, interface, Connection};
 
 pub use passkey_tpm_uv::seat::{Logind, SessionPolicy};
@@ -152,6 +160,13 @@ impl UserLookup for NssUsers {
     }
 }
 
+/// A presence confirmation the broker is waiting for.
+struct PresenceWait {
+    /// Unique bus name of the `Ctap` caller; only it may answer.
+    caller: String,
+    reply: oneshot::Sender<bool>,
+}
+
 /// The D-Bus service object.
 pub struct Broker {
     worker: TpmWorker,
@@ -160,6 +175,7 @@ pub struct Broker {
     sessions: Box<dyn SessionPolicy>,
     verify_timeout: Duration,
     cancels: Arc<Mutex<HashMap<u32, (u64, CancellationToken)>>>,
+    presence: Mutex<HashMap<u64, PresenceWait>>,
     next_request: std::sync::atomic::AtomicU64,
 }
 
@@ -189,6 +205,7 @@ impl Broker {
             sessions,
             verify_timeout,
             cancels: Arc::default(),
+            presence: Mutex::default(),
             next_request: std::sync::atomic::AtomicU64::new(0),
         }
     }
@@ -228,7 +245,13 @@ impl Broker {
 
     /// Serves one request. `cancel` is registered before any await (HARD-12), so a Cancel
     /// that arrives while the session, fprintd or the TPM is still being asked is not lost.
-    async fn run(&self, uid: u32, request: Vec<u8>, cancel: CancellationToken) -> Vec<u8> {
+    async fn run(
+        &self,
+        uid: u32,
+        caller: &Caller<'_>,
+        request: Vec<u8>,
+        cancel: CancellationToken,
+    ) -> Vec<u8> {
         if request.len() > MAX_MSG {
             return vec![STATUS_INVALID_LENGTH];
         }
@@ -264,6 +287,14 @@ impl Broker {
         };
         let pending = match step {
             Step::Done(response) => return response,
+            Step::NeedPresence(pending) => {
+                let outcome = self.presence(caller, pending.rp_id(), &cancel).await;
+                return self
+                    .worker
+                    .complete(pending, outcome)
+                    .await
+                    .unwrap_or_else(|| vec![STATUS_OTHER]);
+            }
             Step::NeedUv(pending) => pending,
         };
         let outcome = match username {
@@ -288,6 +319,72 @@ impl Broker {
             .await
             .unwrap_or_else(|| vec![STATUS_OTHER])
     }
+
+    /// Asks the `Ctap` caller to confirm presence for `prompt` and waits for its answer,
+    /// [`Broker::confirm_presence`], up to the verify timeout.
+    async fn presence(
+        &self,
+        caller: &Caller<'_>,
+        prompt: &str,
+        cancel: &CancellationToken,
+    ) -> UvOutcome {
+        if cancel.is_cancelled() {
+            return UvOutcome::Cancelled;
+        }
+        let id = self
+            .next_request
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (reply, answer) = oneshot::channel();
+        if let Ok(mut map) = self.presence.lock() {
+            map.insert(
+                id,
+                PresenceWait {
+                    caller: caller.name.to_owned(),
+                    reply,
+                },
+            );
+        }
+        let outcome = match Self::request_presence(caller, id, prompt).await {
+            Err(e) => {
+                #[allow(clippy::print_stderr)]
+                {
+                    eprintln!("cannot ask {} for presence: {e}", caller.name);
+                }
+                UvOutcome::Unavailable
+            }
+            Ok(()) => tokio::select! {
+                biased;
+                () = cancel.cancelled() => UvOutcome::Cancelled,
+                () = tokio::time::sleep(self.verify_timeout) => UvOutcome::TimedOut,
+                answer = answer => match answer {
+                    Ok(true) => UvOutcome::Present,
+                    Ok(false) => UvOutcome::Denied,
+                    Err(_) => UvOutcome::Unavailable,
+                },
+            },
+        };
+        if let Ok(mut map) = self.presence.lock() {
+            map.remove(&id);
+        }
+        outcome
+    }
+
+    /// Emits `PresenceRequested` to the caller only (unicast signal).
+    async fn request_presence(caller: &Caller<'_>, id: u64, prompt: &str) -> zbus::Result<()> {
+        let destination = BusName::try_from(caller.name)?;
+        let emitter = SignalEmitter::from_parts(
+            caller.conn.clone(),
+            ObjectPath::from_static_str_unchecked(OBJECT_PATH),
+        )
+        .set_destination(destination);
+        Self::presence_requested(&emitter, id, prompt).await
+    }
+}
+
+/// The connection a `Ctap` call came in on and the caller's unique bus name.
+struct Caller<'a> {
+    conn: &'a Connection,
+    name: &'a str,
 }
 
 #[interface(name = "io.github.dangerousplay.PasskeyTpm1")]
@@ -301,9 +398,16 @@ impl Broker {
         request: Vec<u8>,
     ) -> fdo::Result<Vec<u8>> {
         let uid = Self::caller_uid(conn, &header).await?;
+        let name = header
+            .sender()
+            .ok_or_else(|| fdo::Error::AccessDenied("no sender".into()))?;
+        let caller = Caller {
+            conn,
+            name: name.as_str(),
+        };
         let (seq, cancel) = self.register_cancel(uid);
         let response = if self.sessions.is_active(uid).await {
-            self.run(uid, request, cancel).await
+            self.run(uid, &caller, request, cancel).await
         } else {
             #[allow(clippy::print_stderr)]
             {
@@ -314,6 +418,47 @@ impl Broker {
         self.clear_cancel(uid, seq);
         Ok(response)
     }
+
+    /// Answers a `PresenceRequested` signal: `allow` is the user's choice. Only the
+    /// connection that made the `Ctap` call may answer it.
+    async fn confirm_presence(
+        &self,
+        #[zbus(header)] header: Header<'_>,
+        id: u64,
+        allow: bool,
+    ) -> fdo::Result<()> {
+        let sender = header
+            .sender()
+            .ok_or_else(|| fdo::Error::AccessDenied("no sender".into()))?;
+        let wait = {
+            let mut map = self
+                .presence
+                .lock()
+                .map_err(|_| fdo::Error::Failed("presence state poisoned".into()))?;
+            match map.get(&id) {
+                Some(w) if w.caller == sender.as_str() => map.remove(&id),
+                Some(_) => {
+                    return Err(fdo::Error::AccessDenied(
+                        "not the caller of this request".into(),
+                    ))
+                }
+                None => None,
+            }
+        };
+        let wait =
+            wait.ok_or_else(|| fdo::Error::InvalidArgs("no such presence request".into()))?;
+        let _ = wait.reply.send(allow);
+        Ok(())
+    }
+
+    /// Sent to the `Ctap` caller when a user without an enrolled fingerprint must confirm
+    /// presence for `prompt` (a relying party or purpose). Answer with `ConfirmPresence`.
+    #[zbus(signal)]
+    async fn presence_requested(
+        emitter: &SignalEmitter<'_>,
+        id: u64,
+        prompt: &str,
+    ) -> zbus::Result<()>;
 
     /// Cancels the calling user's pending fingerprint request, if any.
     async fn cancel(

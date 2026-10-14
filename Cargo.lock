@@ -1047,10 +1047,18 @@ version = "0.1.0-beta.1"
 dependencies = [
  "ksni",
  "notify-rust",
+ "passkey-tpm-core",
+ "passkey-tpm-testkit",
+ "passkey-tpm-tpm",
  "passkey-tpm-uv",
+ "passkey-tpm-uvd",
+ "passkey-tpm-wire",
+ "sha2",
  "tokio",
  "tokio-util",
+ "tss-esapi",
  "zbus",
+ "zeroize",
 ]
 
 [[package]]
@@ -1068,6 +1076,7 @@ dependencies = [
 name = "passkey-tpm-uvd"
 version = "0.1.0-beta.1"
 dependencies = [
+ "futures-util",
  "nix",
  "p256",
  "passkey-tpm-core",

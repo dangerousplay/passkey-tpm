@@ -25,6 +25,7 @@ passkey-tpm-uv = { path = "../uv", features = ["mock"] }
 passkey-tpm-wire = { path = "../wire" }
 p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
 sha2 = "0.11"
+futures-util = { version = "0.3", default-features = false }
 
 [lints]
 workspace = true
