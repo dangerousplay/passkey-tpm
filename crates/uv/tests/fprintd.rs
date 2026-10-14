@@ -6,7 +6,7 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use passkey_tpm_uv::fprintd::{self, UvResult, DEVICE_IFACE};
+use passkey_tpm_uv::fprintd::{self, EnrollProgress, UvResult, DEVICE_IFACE};
 use passkey_tpm_uv::mock::{self, MockFprintd, MockHandle, DEVICE_PATH};
 use tokio_util::sync::CancellationToken;
 use zbus::Connection;
@@ -457,4 +457,186 @@ async fn idle_fprintd_is_activated_for_verify() {
         .await,
         UvResult::Match
     );
+}
+
+const FINGER: &str = "left-index-finger";
+
+async fn enroll(f: &Fixture, timeout: Duration) -> (fprintd::EnrollResult, Vec<EnrollProgress>) {
+    enroll_with(f, timeout, CancellationToken::new()).await
+}
+
+async fn enroll_with(
+    f: &Fixture,
+    timeout: Duration,
+    cancel: CancellationToken,
+) -> (fprintd::EnrollResult, Vec<EnrollProgress>) {
+    let mut progress = Vec::new();
+    let result = fprintd::enroll(&f.client, FINGER, timeout, cancel, |p| progress.push(p)).await;
+    (result, progress)
+}
+
+fn assert_enroll_cleaned_up(f: &Fixture) {
+    let calls = f.mock.calls();
+    assert_eq!(
+        calls.claims,
+        vec![String::new()],
+        "Claim(\"\") = calling user"
+    );
+    assert_eq!(calls.enroll_starts, vec![FINGER.to_owned()]);
+    assert_eq!(calls.enroll_stops, 1, "EnrollStop must be called once");
+    assert_eq!(calls.releases, 1, "Release must be called once");
+    assert!(!f.mock.is_claimed());
+    assert!(!f.mock.is_enrolling());
+}
+
+fn enroll_script(results: &[&str], delay: Duration) -> MockFprintd {
+    MockFprintd {
+        enroll_results: results.iter().map(|s| (*s).to_owned()).collect(),
+        delay,
+        ..MockFprintd::default()
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn enroll_completes_and_reports_progress() {
+    let f = fixture(MockFprintd {
+        delay: ms(20),
+        ..MockFprintd::default()
+    })
+    .await;
+    let (result, progress) = enroll(&f, Duration::from_secs(5)).await;
+    assert_eq!(result, fprintd::EnrollResult::Completed);
+    assert_eq!(
+        progress,
+        vec![
+            EnrollProgress::Started {
+                stages: u32::try_from(mock::ENROLL_STAGES).ok()
+            },
+            EnrollProgress::StagePassed,
+            EnrollProgress::Retry("enroll-retry-scan".to_owned()),
+            EnrollProgress::StagePassed,
+        ]
+    );
+    assert_enroll_cleaned_up(&f);
+    assert_eq!(
+        fprintd::enrolled_fingers(&f.client, "").await.unwrap(),
+        vec!["right-index-finger".to_owned(), FINGER.to_owned()]
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn enroll_duplicate_and_failure() {
+    let f = fixture(enroll_script(&["enroll-duplicate"], ms(20))).await;
+    assert_eq!(
+        enroll(&f, Duration::from_secs(5)).await.0,
+        fprintd::EnrollResult::Duplicate
+    );
+    assert_enroll_cleaned_up(&f);
+
+    let f = fixture(enroll_script(
+        &["enroll-stage-passed", "enroll-data-full"],
+        ms(20),
+    ))
+    .await;
+    assert_eq!(
+        enroll(&f, Duration::from_secs(5)).await.0,
+        fprintd::EnrollResult::Failed("enroll-data-full".to_owned())
+    );
+    assert_enroll_cleaned_up(&f);
+    assert_eq!(f.mock.enrolled(), vec!["right-index-finger".to_owned()]);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn enroll_denied_by_polkit_is_not_authorized() {
+    let f = fixture(MockFprintd {
+        deny_enroll: true,
+        ..MockFprintd::default()
+    })
+    .await;
+    assert_eq!(
+        enroll(&f, Duration::from_secs(5)).await.0,
+        fprintd::EnrollResult::NotAuthorized
+    );
+    let calls = f.mock.calls();
+    assert_eq!(calls.releases, 1);
+    assert!(!f.mock.is_claimed());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn enroll_on_claimed_device_is_busy() {
+    let f = fixture(MockFprintd::default()).await;
+    let other = zbus::connection::Builder::address(f.bus_address.as_str())
+        .unwrap()
+        .build()
+        .await
+        .unwrap();
+    other
+        .call_method(
+            Some(fprintd::SERVICE),
+            DEVICE_PATH,
+            Some(DEVICE_IFACE),
+            "Claim",
+            &("bob",),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        enroll(&f, Duration::from_secs(5)).await.0,
+        fprintd::EnrollResult::Busy
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn enroll_cancel_and_timeout_clean_up() {
+    let f = fixture(enroll_script(&[], ms(10))).await;
+    let cancel = CancellationToken::new();
+    let trigger = cancel.clone();
+    let mock = f.mock.clone();
+    tokio::spawn(async move {
+        while !mock.is_enrolling() {
+            tokio::time::sleep(ms(5)).await;
+        }
+        trigger.cancel();
+    });
+    assert_eq!(
+        enroll_with(&f, Duration::from_secs(5), cancel).await.0,
+        fprintd::EnrollResult::Cancelled
+    );
+    assert_enroll_cleaned_up(&f);
+
+    let f = fixture(enroll_script(&[], ms(10))).await;
+    assert_eq!(enroll(&f, ms(400)).await.0, fprintd::EnrollResult::TimedOut);
+    assert_enroll_cleaned_up(&f);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn spoofed_enroll_completed_is_ignored() {
+    let f = fixture(enroll_script(&[], ms(10))).await;
+    let spoofer = zbus::connection::Builder::address(f.bus_address.as_str())
+        .unwrap()
+        .build()
+        .await
+        .unwrap();
+    let mock = f.mock.clone();
+    let target = f.client.unique_name().unwrap().to_owned();
+    let task = tokio::spawn(async move {
+        while !mock.is_enrolling() {
+            tokio::time::sleep(ms(5)).await;
+        }
+        for dest in [None, Some(target.as_str())] {
+            spoofer
+                .emit_signal(
+                    dest,
+                    DEVICE_PATH,
+                    DEVICE_IFACE,
+                    "EnrollStatus",
+                    &("enroll-completed", true),
+                )
+                .await
+                .unwrap();
+        }
+    });
+    assert_eq!(enroll(&f, ms(500)).await.0, fprintd::EnrollResult::TimedOut);
+    task.await.unwrap();
+    assert_enroll_cleaned_up(&f);
 }

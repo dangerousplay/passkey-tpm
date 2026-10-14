@@ -3,8 +3,10 @@
 //! [`serve`] exports a `net.reactivated.Fprint.Manager` at [`MANAGER_PATH`] and one
 //! `net.reactivated.Fprint.Device` at [`DEVICE_PATH`] on the given connection, then requests
 //! the name `net.reactivated.Fprint`. After `VerifyStart`, the device emits the scripted
-//! `VerifyStatus` results, waiting [`MockFprintd::delay`] before each one. Calls are recorded
-//! in [`MockCalls`] for assertions.
+//! `VerifyStatus` results, waiting [`MockFprintd::delay`] before each one; after `EnrollStart`
+//! it emits [`MockFprintd::enroll_results`] as `EnrollStatus` the same way, and a completed
+//! enrollment adds the finger to the enrolled list. Calls are recorded in [`MockCalls`] for
+//! assertions.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -32,7 +34,15 @@ pub struct MockFprintd {
     /// Fingers returned by `ListEnrolledFingers`. Empty means the user has no enrolled prints:
     /// `ListEnrolledFingers` and `VerifyStart` fail with `NoEnrolledPrints`.
     pub enrolled: Vec<String>,
+    /// `EnrollStatus` results emitted after `EnrollStart`, in order; emission stops after the
+    /// first final status (`enroll-completed`, `enroll-failed`, `enroll-duplicate`, ...).
+    pub enroll_results: Vec<String>,
+    /// If `true`, `EnrollStart` fails with `PermissionDenied` (polkit refused).
+    pub deny_enroll: bool,
 }
+
+/// Value of the fake device's `num-enroll-stages` property.
+pub const ENROLL_STAGES: i32 = 3;
 
 impl Default for MockFprintd {
     fn default() -> Self {
@@ -40,6 +50,13 @@ impl Default for MockFprintd {
             results: vec!["verify-match".to_owned()],
             delay: Duration::from_millis(10),
             enrolled: vec!["right-index-finger".to_owned()],
+            enroll_results: vec![
+                "enroll-stage-passed".to_owned(),
+                "enroll-retry-scan".to_owned(),
+                "enroll-stage-passed".to_owned(),
+                "enroll-completed".to_owned(),
+            ],
+            deny_enroll: false,
         }
     }
 }
@@ -76,6 +93,10 @@ pub struct MockCalls {
     pub releases: u32,
     /// Usernames passed to `ListEnrolledFingers`, in order.
     pub list_enrolled: Vec<String>,
+    /// Finger names passed to `EnrollStart`, in order.
+    pub enroll_starts: Vec<String>,
+    /// Number of `EnrollStop` calls.
+    pub enroll_stops: u32,
 }
 
 #[derive(Debug, Default)]
@@ -83,6 +104,8 @@ struct DeviceState {
     calls: MockCalls,
     claimed: bool,
     verifying: Option<CancellationToken>,
+    enrolling: Option<CancellationToken>,
+    enrolled: Vec<String>,
 }
 
 type Shared = Arc<Mutex<DeviceState>>;
@@ -115,6 +138,18 @@ impl MockHandle {
     pub fn is_verifying(&self) -> bool {
         lock(&self.state).verifying.is_some()
     }
+
+    /// Whether an enrollment is currently running.
+    #[must_use]
+    pub fn is_enrolling(&self) -> bool {
+        lock(&self.state).enrolling.is_some()
+    }
+
+    /// The currently enrolled fingers.
+    #[must_use]
+    pub fn enrolled(&self) -> Vec<String> {
+        lock(&self.state).enrolled.clone()
+    }
 }
 
 /// fprintd-style D-Bus errors (`net.reactivated.Fprint.Error.*`).
@@ -127,6 +162,7 @@ enum FprintError {
     AlreadyInUse(String),
     NoEnrolledPrints(String),
     NoActionInProgress(String),
+    PermissionDenied(String),
 }
 
 struct Manager;
@@ -158,6 +194,17 @@ fn is_final(result: &str) -> bool {
     )
 }
 
+fn is_enroll_final(result: &str) -> bool {
+    !matches!(
+        result,
+        "enroll-stage-passed"
+            | "enroll-retry-scan"
+            | "enroll-swipe-too-short"
+            | "enroll-finger-not-centered"
+            | "enroll-remove-and-retry"
+    )
+}
+
 #[interface(name = "net.reactivated.Fprint.Device")]
 impl Device {
     #[zbus(name = "Claim")]
@@ -184,18 +231,22 @@ impl Device {
         if let Some(token) = st.verifying.take() {
             token.cancel();
         }
+        if let Some(token) = st.enrolling.take() {
+            token.cancel();
+        }
         Ok(())
     }
 
     #[zbus(name = "ListEnrolledFingers")]
     fn list_enrolled_fingers(&self, username: String) -> Result<Vec<String>, FprintError> {
-        lock(&self.state).calls.list_enrolled.push(username);
-        if self.script.enrolled.is_empty() {
+        let mut st = lock(&self.state);
+        st.calls.list_enrolled.push(username);
+        if st.enrolled.is_empty() {
             return Err(FprintError::NoEnrolledPrints(
                 "no enrolled prints".to_owned(),
             ));
         }
-        Ok(self.script.enrolled.clone())
+        Ok(st.enrolled.clone())
     }
 
     #[zbus(name = "VerifyStart")]
@@ -213,7 +264,7 @@ impl Device {
             if st.verifying.is_some() {
                 return Err(FprintError::AlreadyInUse("verify in progress".to_owned()));
             }
-            if self.script.enrolled.is_empty() {
+            if st.enrolled.is_empty() {
                 return Err(FprintError::NoEnrolledPrints(
                     "no enrolled prints".to_owned(),
                 ));
@@ -255,6 +306,84 @@ impl Device {
         }
     }
 
+    #[zbus(name = "EnrollStart")]
+    fn enroll_start(
+        &self,
+        finger_name: String,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> Result<(), FprintError> {
+        let token = {
+            let mut st = lock(&self.state);
+            st.calls.enroll_starts.push(finger_name.clone());
+            if !st.claimed {
+                return Err(FprintError::ClaimDevice("device not claimed".to_owned()));
+            }
+            if self.script.deny_enroll {
+                return Err(FprintError::PermissionDenied(
+                    "not authorized to enroll".to_owned(),
+                ));
+            }
+            if st.enrolling.is_some() || st.verifying.is_some() {
+                return Err(FprintError::AlreadyInUse("action in progress".to_owned()));
+            }
+            let token = CancellationToken::new();
+            st.enrolling = Some(token.clone());
+            token
+        };
+        let emitter = emitter.into_owned();
+        let results = self.script.enroll_results.clone();
+        let delay = self.script.delay;
+        let state = Arc::clone(&self.state);
+        tokio::spawn(async move {
+            for result in results {
+                tokio::select! {
+                    () = token.cancelled() => return,
+                    () = tokio::time::sleep(delay) => {}
+                }
+                let done = is_enroll_final(&result);
+                if done && result == "enroll-completed" {
+                    let mut st = lock(&state);
+                    if !st.enrolled.contains(&finger_name) {
+                        st.enrolled.push(finger_name.clone());
+                    }
+                }
+                if Self::enroll_status(&emitter, &result, done).await.is_err() || done {
+                    return;
+                }
+            }
+        });
+        Ok(())
+    }
+
+    #[zbus(name = "EnrollStop")]
+    fn enroll_stop(&self) -> Result<(), FprintError> {
+        let mut st = lock(&self.state);
+        st.calls.enroll_stops = st.calls.enroll_stops.saturating_add(1);
+        match st.enrolling.take() {
+            Some(token) => {
+                token.cancel();
+                Ok(())
+            }
+            None => Err(FprintError::NoActionInProgress(
+                "no enrollment in progress".to_owned(),
+            )),
+        }
+    }
+
+    /// fprintd's `num-enroll-stages` property.
+    #[zbus(property, name = "num-enroll-stages")]
+    fn num_enroll_stages(&self) -> i32 {
+        ENROLL_STAGES
+    }
+
+    /// `EnrollStatus(s result, b done)`.
+    #[zbus(signal, name = "EnrollStatus")]
+    async fn enroll_status(
+        emitter: &SignalEmitter<'_>,
+        result: &str,
+        done: bool,
+    ) -> zbus::Result<()>;
+
     /// `VerifyStatus(s result, b done)`.
     #[zbus(signal, name = "VerifyStatus")]
     async fn verify_status(
@@ -270,7 +399,10 @@ impl Device {
 ///
 /// Returns an error if the objects can't be registered or the name can't be acquired.
 pub async fn serve(conn: &Connection, mock: MockFprintd) -> zbus::Result<MockHandle> {
-    let state: Shared = Arc::default();
+    let state: Shared = Arc::new(Mutex::new(DeviceState {
+        enrolled: mock.enrolled.clone(),
+        ..DeviceState::default()
+    }));
     let server = conn.object_server();
     server.at(MANAGER_PATH, Manager).await?;
     server

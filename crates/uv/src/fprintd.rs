@@ -79,18 +79,16 @@ fn classify(result: &str, done: bool) -> Status {
     }
 }
 
-/// Returns `true` only if a signal comes from the fprintd instance we talk to and from the
-/// claimed device.
-fn signal_is_trusted(msg: &Message, owner: &str, device_path: &str) -> bool {
+/// Returns `true` only if a `member` signal comes from the fprintd instance we talk to and from
+/// the claimed device.
+fn signal_is_trusted(msg: &Message, owner: &str, device_path: &str, member: &str) -> bool {
     let header = msg.header();
     let sender_ok = header.sender().is_some_and(|s| s.as_str() == owner);
     let path_ok = header.path().is_some_and(|p| p.as_str() == device_path);
     let iface_ok = header
         .interface()
         .is_some_and(|i| i.as_str() == DEVICE_IFACE);
-    let member_ok = header
-        .member()
-        .is_some_and(|m| m.as_str() == "VerifyStatus");
+    let member_ok = header.member().is_some_and(|m| m.as_str() == member);
     msg.message_type() == MessageType::Signal && sender_ok && path_ok && iface_ok && member_ok
 }
 
@@ -103,7 +101,8 @@ struct Session {
     owner: Option<String>,
     device: Option<OwnedObjectPath>,
     claim_sent: bool,
-    verify_sent: bool,
+    /// The method that stops the running action (`VerifyStop`, `EnrollStop`), once started.
+    stop: Option<&'static str>,
 }
 
 impl Session {
@@ -111,12 +110,10 @@ impl Session {
         let (Some(owner), Some(device)) = (&self.owner, &self.device) else {
             return;
         };
-        if self.verify_sent {
-            let _ = tokio::time::timeout(
-                CLEANUP_TIMEOUT,
-                call_device(conn, owner, device, "VerifyStop", &()),
-            )
-            .await;
+        if let Some(stop) = self.stop {
+            let _ =
+                tokio::time::timeout(CLEANUP_TIMEOUT, call_device(conn, owner, device, stop, &()))
+                    .await;
         }
         if self.claim_sent {
             let _ = tokio::time::timeout(
@@ -266,12 +263,12 @@ async fn run(conn: &Connection, username: &str, session: &mut Session) -> UvResu
 
     // Subscribe before VerifyStart so no status can be missed. AddMatch completes before
     // `for_match_rule` returns.
-    let mut stream = match subscribe(conn, &owner, &device).await {
+    let mut stream = match subscribe(conn, &owner, &device, "VerifyStatus").await {
         Ok(s) => s,
         Err(e) => return unavailable("AddMatch", &e),
     };
 
-    session.verify_sent = true;
+    session.stop = Some("VerifyStop");
     if let Err(e) = call_device(conn, &owner, &device, "VerifyStart", &("any",)).await {
         return unavailable("VerifyStart", &e);
     }
@@ -280,7 +277,7 @@ async fn run(conn: &Connection, username: &str, session: &mut Session) -> UvResu
         let Ok(msg) = item else {
             continue;
         };
-        if !signal_is_trusted(&msg, &owner, device.as_str()) {
+        if !signal_is_trusted(&msg, &owner, device.as_str(), "VerifyStatus") {
             continue;
         }
         let Ok((result, done)) = msg.body().deserialize::<(String, bool)>() else {
@@ -293,17 +290,197 @@ async fn run(conn: &Connection, username: &str, session: &mut Session) -> UvResu
     UvResult::Unavailable("D-Bus connection closed".to_owned())
 }
 
+/// D-Bus error fprintd returns when polkit denies an action (including a dismissed dialog).
+pub const ERR_PERMISSION_DENIED: &str = "net.reactivated.Fprint.Error.PermissionDenied";
+/// D-Bus error fprintd returns when another client holds the device.
+pub const ERR_ALREADY_IN_USE: &str = "net.reactivated.Fprint.Error.AlreadyInUse";
+
+/// A non-final `EnrollStatus` during enrollment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnrollProgress {
+    /// The fprintd `num-enroll-stages` of the device, reported once before the first scan
+    /// (`None` if the property can't be read).
+    Started {
+        /// Number of scans the device needs.
+        stages: Option<u32>,
+    },
+    /// One scan was accepted (`enroll-stage-passed`).
+    StagePassed,
+    /// The scan must be repeated; the fprintd status (e.g. `enroll-finger-not-centered`).
+    Retry(String),
+}
+
+/// Outcome of an enrollment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnrollResult {
+    /// `enroll-completed`: the finger is stored.
+    Completed,
+    /// `enroll-duplicate`: this finger is already enrolled (possibly under another name).
+    Duplicate,
+    /// fprintd reported a final failure (the status, e.g. `enroll-data-full`).
+    Failed(String),
+    /// polkit denied enrollment, or the user dismissed the authentication dialog.
+    NotAuthorized,
+    /// Another client holds the reader.
+    Busy,
+    /// The caller cancelled the enrollment.
+    Cancelled,
+    /// No final status arrived before the timeout.
+    TimedOut,
+    /// fprintd or the reader is unavailable.
+    Unavailable(String),
+}
+
+/// What a single `EnrollStatus` signal means for the enrollment loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EnrollStep {
+    Progress(EnrollProgress),
+    Final(EnrollResult),
+}
+
+/// Maps an `EnrollStatus(result, done)` pair to the next step.
+fn classify_enroll(result: &str, done: bool) -> EnrollStep {
+    match result {
+        "enroll-completed" => EnrollStep::Final(EnrollResult::Completed),
+        "enroll-duplicate" => EnrollStep::Final(EnrollResult::Duplicate),
+        "enroll-failed" | "enroll-data-full" | "enroll-disconnected" | "enroll-unknown-error" => {
+            EnrollStep::Final(EnrollResult::Failed(result.to_owned()))
+        }
+        _ if done => EnrollStep::Final(EnrollResult::Failed(result.to_owned())),
+        "enroll-stage-passed" => EnrollStep::Progress(EnrollProgress::StagePassed),
+        _ => EnrollStep::Progress(EnrollProgress::Retry(result.to_owned())),
+    }
+}
+
+fn enroll_error(step: &str, err: &zbus::Error) -> EnrollResult {
+    match err {
+        zbus::Error::MethodError(name, _, _) if name.as_str() == ERR_PERMISSION_DENIED => {
+            EnrollResult::NotAuthorized
+        }
+        zbus::Error::MethodError(name, _, _) if name.as_str() == ERR_ALREADY_IN_USE => {
+            EnrollResult::Busy
+        }
+        _ => EnrollResult::Unavailable(format!("{step}: {err}")),
+    }
+}
+
+/// Enrolls `finger` (an fprintd finger name such as `right-index-finger`) for the calling
+/// user on fprintd's default device.
+///
+/// Sequence: resolve the fprintd owner (activating it if needed), `GetDefaultDevice`,
+/// `Claim("")`, subscribe to `EnrollStatus`, read `num-enroll-stages`, `EnrollStart(finger)`,
+/// then report every non-final status to `on_progress` until a final one. fprintd's polkit
+/// action `net.reactivated.fprint.device.enroll` decides whether the caller may enroll.
+/// `EnrollStop` (if started) and `Release` (if claimed) are always sent before returning.
+/// Signals are trusted only from the resolved owner and the claimed device, as in [`verify`].
+///
+/// `timeout` bounds the whole operation, including the polkit dialog.
+pub async fn enroll(
+    conn: &Connection,
+    finger: &str,
+    timeout: Duration,
+    cancel: CancellationToken,
+    mut on_progress: impl FnMut(EnrollProgress) + Send,
+) -> EnrollResult {
+    let deadline = Instant::now() + timeout;
+    let mut session = Session::default();
+    let fut = run_enroll(conn, finger, &mut session, &mut on_progress);
+    let result = tokio::select! {
+        biased;
+        () = cancel.cancelled() => EnrollResult::Cancelled,
+        () = tokio::time::sleep_until(deadline) => EnrollResult::TimedOut,
+        r = fut => r,
+    };
+    session.cleanup(conn).await;
+    result
+}
+
+async fn run_enroll(
+    conn: &Connection,
+    finger: &str,
+    session: &mut Session,
+    on_progress: &mut (impl FnMut(EnrollProgress) + Send),
+) -> EnrollResult {
+    let owner = match resolve_owner(conn).await {
+        Ok(o) => o,
+        Err(e) => return EnrollResult::Unavailable(e),
+    };
+    session.owner = Some(owner.clone());
+
+    let device = match default_device(conn, &owner).await {
+        Ok(d) => d,
+        Err(e) => return enroll_error("GetDefaultDevice", &e),
+    };
+    session.device = Some(device.clone());
+
+    session.claim_sent = true;
+    if let Err(e) = call_device(conn, &owner, &device, "Claim", &("",)).await {
+        return enroll_error("Claim", &e);
+    }
+
+    let mut stream = match subscribe(conn, &owner, &device, "EnrollStatus").await {
+        Ok(s) => s,
+        Err(e) => return enroll_error("AddMatch", &e),
+    };
+
+    on_progress(EnrollProgress::Started {
+        stages: enroll_stages(conn, &owner, &device).await,
+    });
+
+    session.stop = Some("EnrollStop");
+    if let Err(e) = call_device(conn, &owner, &device, "EnrollStart", &(finger,)).await {
+        return enroll_error("EnrollStart", &e);
+    }
+
+    while let Some(item) = stream.next().await {
+        let Ok(msg) = item else {
+            continue;
+        };
+        if !signal_is_trusted(&msg, &owner, device.as_str(), "EnrollStatus") {
+            continue;
+        }
+        let Ok((result, done)) = msg.body().deserialize::<(String, bool)>() else {
+            continue;
+        };
+        match classify_enroll(&result, done) {
+            EnrollStep::Final(r) => return r,
+            EnrollStep::Progress(p) => on_progress(p),
+        }
+    }
+    EnrollResult::Unavailable("D-Bus connection closed".to_owned())
+}
+
+/// The device's `num-enroll-stages` property, if readable and positive.
+async fn enroll_stages(conn: &Connection, owner: &str, device: &OwnedObjectPath) -> Option<u32> {
+    let reply = conn
+        .call_method(
+            Some(owner),
+            device.as_str(),
+            Some("org.freedesktop.DBus.Properties"),
+            "Get",
+            &(DEVICE_IFACE, "num-enroll-stages"),
+        )
+        .await
+        .ok()?;
+    let value: zbus::zvariant::OwnedValue = reply.body().deserialize().ok()?;
+    i32::try_from(value)
+        .ok()
+        .and_then(|n| u32::try_from(n).ok())
+        .filter(|n| *n > 0)
+}
+
 async fn subscribe(
     conn: &Connection,
     owner: &str,
     device: &OwnedObjectPath,
+    member: &str,
 ) -> zbus::Result<MessageStream> {
     let rule = MatchRule::builder()
         .msg_type(MessageType::Signal)
         .sender(owner)?
         .path(device.as_str())?
         .interface(DEVICE_IFACE)?
-        .member("VerifyStatus")?
+        .member(member)?
         .build();
     MessageStream::for_match_rule(rule, conn, None).await
 }
@@ -316,6 +493,19 @@ async fn subscribe(
 /// than `NoEnrolledPrints` (which maps to `Ok(false)`). An error means UV is unavailable, not
 /// that the user has no fingerprints.
 pub async fn has_enrolled(conn: &Connection, username: &str) -> Result<bool, String> {
+    enrolled_fingers(conn, username)
+        .await
+        .map(|fingers| !fingers.is_empty())
+}
+
+/// The fingers (fprintd names such as `right-index-finger`) `username` has enrolled on the
+/// default device. An empty `username` means the calling user.
+///
+/// # Errors
+///
+/// Returns a description if fprintd can't be started or reached, or reports an error other
+/// than `NoEnrolledPrints` (which maps to an empty list).
+pub async fn enrolled_fingers(conn: &Connection, username: &str) -> Result<Vec<String>, String> {
     let owner = resolve_owner(conn).await?;
     let device = default_device(conn, &owner)
         .await
@@ -324,10 +514,9 @@ pub async fn has_enrolled(conn: &Connection, username: &str) -> Result<bool, Str
         Ok(reply) => reply
             .body()
             .deserialize::<Vec<String>>()
-            .map(|fingers| !fingers.is_empty())
             .map_err(|e| format!("ListEnrolledFingers reply: {e}")),
         Err(zbus::Error::MethodError(name, _, _)) if name.as_str() == ERR_NO_ENROLLED_PRINTS => {
-            Ok(false)
+            Ok(Vec::new())
         }
         Err(e) => Err(format!("ListEnrolledFingers: {e}")),
     }
@@ -417,6 +606,52 @@ mod tests {
         assert_eq!(classify("something-new", false), Status::Continue);
     }
 
+    #[test]
+    fn enroll_statuses() {
+        assert_eq!(
+            classify_enroll("enroll-completed", true),
+            EnrollStep::Final(EnrollResult::Completed)
+        );
+        assert_eq!(
+            classify_enroll("enroll-duplicate", true),
+            EnrollStep::Final(EnrollResult::Duplicate)
+        );
+        assert_eq!(
+            classify_enroll("enroll-stage-passed", false),
+            EnrollStep::Progress(EnrollProgress::StagePassed)
+        );
+        for retry in [
+            "enroll-retry-scan",
+            "enroll-swipe-too-short",
+            "enroll-finger-not-centered",
+            "enroll-remove-and-retry",
+        ] {
+            assert_eq!(
+                classify_enroll(retry, false),
+                EnrollStep::Progress(EnrollProgress::Retry(retry.to_owned())),
+                "{retry}"
+            );
+        }
+        for failure in [
+            "enroll-failed",
+            "enroll-data-full",
+            "enroll-disconnected",
+            "enroll-unknown-error",
+        ] {
+            for done in [false, true] {
+                assert_eq!(
+                    classify_enroll(failure, done),
+                    EnrollStep::Final(EnrollResult::Failed(failure.to_owned())),
+                    "{failure}"
+                );
+            }
+        }
+        assert_eq!(
+            classify_enroll("something-new", true),
+            EnrollStep::Final(EnrollResult::Failed("something-new".to_owned()))
+        );
+    }
+
     fn signal(sender: Option<&str>, path: &str, iface: &str, member: &str) -> Message {
         let mut b = Message::signal(path, iface, member).unwrap();
         if let Some(s) = sender {
@@ -432,17 +667,20 @@ mod tests {
         assert!(signal_is_trusted(
             &signal(Some(owner), dev, DEVICE_IFACE, "VerifyStatus"),
             owner,
-            dev
+            dev,
+            "VerifyStatus"
         ));
         assert!(!signal_is_trusted(
             &signal(Some(":1.8"), dev, DEVICE_IFACE, "VerifyStatus"),
             owner,
-            dev
+            dev,
+            "VerifyStatus"
         ));
         assert!(!signal_is_trusted(
             &signal(None, dev, DEVICE_IFACE, "VerifyStatus"),
             owner,
-            dev
+            dev,
+            "VerifyStatus"
         ));
         assert!(!signal_is_trusted(
             &signal(
@@ -452,17 +690,20 @@ mod tests {
                 "VerifyStatus"
             ),
             owner,
-            dev
+            dev,
+            "VerifyStatus"
         ));
         assert!(!signal_is_trusted(
             &signal(Some(owner), dev, "org.example.Evil", "VerifyStatus"),
             owner,
-            dev
+            dev,
+            "VerifyStatus"
         ));
         assert!(!signal_is_trusted(
             &signal(Some(owner), dev, DEVICE_IFACE, "EnrollStatus"),
             owner,
-            dev
+            dev,
+            "VerifyStatus"
         ));
     }
 }
