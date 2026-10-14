@@ -34,4 +34,5 @@ Discoverable passkeys, a PIN, PRF/hmac-secret and credential management, so that
 
 largeBlob, minPinLength extension, authenticatorConfig (alwaysUv, setMinPINLength),
 enterprise attestation, a presence-only gate for users without a fingerprint reader
-(needs a trusted prompt, M4), CTAP1/U2F.
+(needs a trusted prompt, M4 — superseded 2026-10-13 by AD-022: notification-based presence,
+`.specs/features/pin-without-fingerprint/`), CTAP1/U2F.

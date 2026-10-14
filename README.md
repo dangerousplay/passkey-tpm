@@ -28,7 +28,8 @@ the laptop: no USB key to carry, and the private keys never leave the TPM.
 - Linux with a TPM 2.0 (any firmware TPM — AMD fTPM, Intel PTT — or discrete chip). Check
   with `ls /dev/tpmrm0`.
 - A fingerprint reader supported by [libfprint](https://fprint.freedesktop.org/supported-devices.html),
-  with at least one finger enrolled.
+  with at least one finger enrolled — or, without one, a security-key PIN (set it from the
+  tray icon or your browser) and a click on *Allow* to confirm each use.
 - systemd, D-Bus, polkit, fprintd and tpm2-tss (installed automatically by the packages).
 
 ## Install

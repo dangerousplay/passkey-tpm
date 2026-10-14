@@ -144,6 +144,13 @@
 **Trade-off:** no use from seatless sessions (SSH); requires logind.
 **Impact:** `passkey_tpm_uv::seat`; `Broker::new` takes a `SessionPolicy`; VM scenarios log users in on VTs and switch with `chvt`.
 
+### AD-022: Users without a fingerprint use PIN + presence confirmation (2026-10-13)
+
+**Decision:** For users with no enrolled fingerprint (no reader, fprintd unavailable or zero fingers), a request whose UV already came from a verified PIN token — and touch-to-select, selection and reset — asks for presence instead of failing: the core returns `Step::NeedPresence`, the broker sends a unicast `PresenceRequested(id, prompt)` signal to the `Ctap` caller and accepts `ConfirmPresence(id, allow)` only from that same connection; the agent answers with an Allow/Deny notification. Presence never replaces a fingerprint the core asked for, and signatures still go through the UV gate. The tray can set/change the PIN (zenity/kdialog + clientPIN protocol 2 over `Ctap`). Spec: `.specs/features/pin-without-fingerprint/`.
+**Reason:** Machines without a reader could not use passkey-tpm at all (user request, 2026-10-13). A broker-side presence step keeps the protocol open to other front-ends (credentialsd provider) and other passkey types later.
+**Trade-off:** The confirmation is same-user UI: malware in the session that learned the PIN can click/fake it (X11 especially). Weaker than a fingerprint touch; supersedes the "UP needs a fingerprint" part of AD-012 and the MVP-2 out-of-scope "presence-only gate" item. Users with fingerprints are unaffected.
+**Impact:** `passkey_tpm_core::ctap2::{Step::NeedPresence, UvOutcome::{Present, Denied}}`; broker D-Bus API gains `ConfirmPresence` and the `PresenceRequested` signal; getAssertion now returns PUAT_REQUIRED like makeCredential when a PIN is set and there is no fingerprint.
+
 ### AD-021: Tray icon = separate `passkey-tpm-tray` binary on ksni; enrollment through fprintd's polkit (2026-10-13)
 
 **Decision:** A StatusNotifierItem in its own crate/binary (XDG autostart), built on `ksni` 0.3 with a `deny.toml` license exception scoped to ksni (Unlicense). It shows reader / broker / virtual-key status and enrolls the next free finger with `Claim("")` + `EnrollStart`, so fprintd's `net.reactivated.fprint.device.enroll` polkit action authorises it. Spec: `.specs/features/tray/`.
@@ -309,6 +316,7 @@
 - [ ] Trusted-prompt feasibility (broker-driven prompt vs credentialsd-ui)
 - [x] ADR-004: ctap-types vs passkey-types — neither; publish our own (AD-018, 2026-10-04)
 - [ ] Contact linux-credentials maintainers
+- [ ] PIN-only UAT: no-reader user sets a PIN from the tray, registers on webauthn.io with the Allow notification (GNOME/KDE notification servers with actions)
 - [ ] Tray: try on KDE Plasma and GNOME + AppIndicator with a real reader (polkit enroll dialog, notifications); add a VM scenario with the libfprint virtual device
 - [ ] Re-check UNVERIFIED items in the research docs before design
 
