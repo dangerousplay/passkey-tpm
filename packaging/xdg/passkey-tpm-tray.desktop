@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=passkey-tpm
+Comment=passkey-tpm status and fingerprint enrollment
+Exec=passkey-tpm-tray
+Icon=fingerprint
+Terminal=false
+NoDisplay=true
+Categories=System;Security;
+X-GNOME-Autostart-enabled=true
+X-KDE-autostart-phase=2

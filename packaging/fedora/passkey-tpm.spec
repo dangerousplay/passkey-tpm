@@ -30,13 +30,13 @@ TPM policy secrets; a per-user agent exposes a virtual security key.
 %cargo_prep -v vendor
 
 %build
-%cargo_build -- -p passkey-tpm-uvd -p passkey-tpm-agent -p passkey-tpm-cli
+%cargo_build -- -p passkey-tpm-uvd -p passkey-tpm-agent -p passkey-tpm-cli -p passkey-tpm-tray
 
 %install
 cargo run --offline -q -p xtask -- dist --no-build --destdir %{buildroot} --prefix %{_prefix} --libexecdir %{_libexecdir}
 
 %check
-%cargo_test -- -p passkey-tpm-core -p passkey-tpm-wire -p passkey-tpm-agent
+%cargo_test -- -p passkey-tpm-core -p passkey-tpm-wire -p passkey-tpm-agent -p passkey-tpm-tray
 
 %pre
 %sysusers_create_compat %{SOURCE2}
@@ -58,6 +58,8 @@ cargo run --offline -q -p xtask -- dist --no-build --destdir %{buildroot} --pref
 %license LICENSE-MIT LICENSE-APACHE
 %doc README.md SECURITY.md docs/threat-model.md
 %{_bindir}/passkey-tpm
+%{_bindir}/passkey-tpm-tray
+%{_sysconfdir}/xdg/autostart/passkey-tpm-tray.desktop
 %{_libexecdir}/passkey-tpm/
 %{_unitdir}/passkey-tpm-uvd.service
 %{_userunitdir}/passkey-tpm-agent.service

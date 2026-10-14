@@ -31,6 +31,17 @@ pub const INSTALL: &[(&str, &str, u32)] = &[
         0o755,
     ),
     (
+        "target/release/passkey-tpm-tray",
+        "{prefix}/bin/passkey-tpm-tray",
+        0o755,
+    ),
+    // XDG autostart only reads $XDG_CONFIG_DIRS (/etc/xdg), whatever the prefix.
+    (
+        "packaging/xdg/passkey-tpm-tray.desktop",
+        "/etc/xdg/autostart/passkey-tpm-tray.desktop",
+        0o644,
+    ),
+    (
         "packaging/systemd/passkey-tpm-uvd.service",
         "{prefix}/lib/systemd/system/passkey-tpm-uvd.service",
         0o644,
@@ -97,7 +108,12 @@ pub const INSTALL: &[(&str, &str, u32)] = &[
     ),
 ];
 
-const BINARIES: &[&str] = &["passkey-tpm-uvd", "passkey-tpm-agent", "passkey-tpm-cli"];
+const BINARIES: &[&str] = &[
+    "passkey-tpm-uvd",
+    "passkey-tpm-agent",
+    "passkey-tpm-cli",
+    "passkey-tpm-tray",
+];
 
 #[derive(Debug, PartialEq, Eq)]
 struct Options {
@@ -279,7 +295,9 @@ mod tests {
             .iter()
             .map(|(_, d, _)| destination(d, "/usr", "/usr/libexec"))
             .collect();
-        assert!(dests.iter().all(|d| d.starts_with("usr")));
+        assert!(dests
+            .iter()
+            .all(|d| d.starts_with("usr") || d.starts_with("etc/xdg/autostart")));
         let mut unique = dests.clone();
         unique.sort();
         unique.dedup();

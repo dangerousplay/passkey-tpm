@@ -22,14 +22,14 @@ prepare() {
 build() {
   cd "$pkgname-$_tag"
   export RUSTUP_TOOLCHAIN=stable CARGO_TARGET_DIR=target
-  cargo build --frozen --release -p passkey-tpm-uvd -p passkey-tpm-agent -p passkey-tpm-cli
+  cargo build --frozen --release -p passkey-tpm-uvd -p passkey-tpm-agent -p passkey-tpm-cli -p passkey-tpm-tray
 }
 
 check() {
   cd "$pkgname-$_tag"
   export RUSTUP_TOOLCHAIN=stable
   # Unit tests only; TPM integration tests need swtpm.
-  cargo test --frozen -p passkey-tpm-core -p passkey-tpm-wire -p passkey-tpm-agent
+  cargo test --frozen -p passkey-tpm-core -p passkey-tpm-wire -p passkey-tpm-agent -p passkey-tpm-tray
 }
 
 package() {
