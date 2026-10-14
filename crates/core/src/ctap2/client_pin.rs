@@ -319,6 +319,7 @@ impl<T: TpmOps> Authenticator<T> {
                 permissions,
                 rp_id_hash,
             }),
+            presence_only: false,
         })))
     }
 

@@ -104,6 +104,10 @@ impl<T: TpmOps> Authenticator<T> {
             Some(Verification::Token {
                 user_present: false,
             }) => self.gesture(uid, user, rp_id, PendingKind::GetAssertion(request), false),
+            // No fingerprint to give UV, but a PIN could (same as makeCredential, M2-06).
+            Some(Verification::Gesture) | None if !user.uv_enrolled && pin_set => {
+                Err(status::PUAT_REQUIRED)
+            }
             // No token: the fingerprint gives UP and UV.
             Some(Verification::Gesture) | None => {
                 self.gesture(uid, user, rp_id, PendingKind::GetAssertion(request), true)

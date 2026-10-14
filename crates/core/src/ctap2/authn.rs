@@ -1,9 +1,11 @@
 //! The authenticator: two-phase request processing over a [`TpmOps`] backend.
 //!
 //! [`Authenticator::prepare`] parses and validates a request and either answers it or asks
-//! the broker for a fingerprint match ([`Step::NeedUv`]); [`Authenticator::complete`]
-//! finishes it with the outcome. A signature is only produced from a [`UvEvidence`], built
-//! either from a fingerprint match or from a verified pinUvAuthToken.
+//! the broker for a fingerprint match ([`Step::NeedUv`]) or, for users without an enrolled
+//! fingerprint, for a presence confirmation ([`Step::NeedPresence`], AD-022);
+//! [`Authenticator::complete`] finishes it with the outcome. A signature is only produced
+//! from a [`UvEvidence`], built either from a fingerprint match or from a verified
+//! pinUvAuthToken.
 
 use std::collections::HashMap;
 
@@ -27,12 +29,21 @@ pub enum Step {
     Done(Vec<u8>),
     /// A fingerprint match is required; show a prompt naming `pending.rp_id()`.
     NeedUv(Box<Pending>),
+    /// The user has no enrolled fingerprint: only presence is missing (UV, where needed,
+    /// came from a verified PIN token). Ask the user to confirm `pending.rp_id()` and
+    /// complete with [`UvOutcome::Present`] or [`UvOutcome::Denied`].
+    NeedPresence(Box<Pending>),
 }
 
-/// Outcome of the fingerprint check the broker ran for a [`Pending`] request.
+/// Outcome of the fingerprint check or presence confirmation the broker ran for a
+/// [`Pending`] request.
 #[derive(Debug)]
 pub enum UvOutcome {
     Matched(UvEvidence),
+    /// The user confirmed presence. Accepted only for [`Step::NeedPresence`] requests.
+    Present,
+    /// The user refused the presence confirmation.
+    Denied,
     NoMatch,
     Cancelled,
     TimedOut,
@@ -45,6 +56,8 @@ pub struct Pending {
     pub(super) uid: Uid,
     pub(super) rp_id: String,
     pub(super) kind: PendingKind,
+    /// Created by [`Step::NeedPresence`]: presence alone completes it.
+    pub(super) presence_only: bool,
 }
 
 impl Pending {
@@ -148,9 +161,12 @@ impl<T: TpmOps> Authenticator<T> {
         let ev = match outcome {
             UvOutcome::Matched(ev) if ev.uid() == uid.0 => {
                 self.user(uid).uv_failures = 0;
-                ev
+                Some(ev)
             }
             UvOutcome::Matched(_) => return error(status::OPERATION_DENIED),
+            // Presence never stands in for a fingerprint the request asked for.
+            UvOutcome::Present if pending.presence_only => None,
+            UvOutcome::Present | UvOutcome::Denied => return error(status::OPERATION_DENIED),
             UvOutcome::NoMatch => {
                 let state = self.user(uid);
                 state.uv_failures = state.uv_failures.saturating_add(1);
@@ -165,10 +181,19 @@ impl<T: TpmOps> Authenticator<T> {
             UvOutcome::TimedOut => return error(status::USER_ACTION_TIMEOUT),
             UvOutcome::Unavailable => return error(status::NOT_ALLOWED),
         };
+        // A presence-only makeCredential/getAssertion was created only after its
+        // pinUvAuthParam verified against a userVerified token (`gesture`, AD-022).
+        let token_ev = || UvEvidence::from_token(uid.0);
         let result = match pending.kind {
             PendingKind::TouchThen(code) => Err(code),
-            PendingKind::MakeCredential(req) => self.finish_make_credential(uid, req, ev),
-            PendingKind::GetAssertion(req) => self.finish_get_assertion(uid, req, ev, now_ms),
+            PendingKind::MakeCredential(req) => {
+                self.finish_make_credential(uid, req, ev.unwrap_or_else(token_ev))
+            }
+            PendingKind::GetAssertion(req) => {
+                self.finish_get_assertion(uid, req, ev.unwrap_or_else(token_ev), now_ms)
+            }
+            // Built-in UV only: never completed by presence.
+            PendingKind::TokenUsingUv(_) if ev.is_none() => Err(status::OPERATION_DENIED),
             PendingKind::TokenUsingUv(req) => self.finish_token_using_uv(uid, req, now_ms),
             PendingKind::Reset => {
                 let r = self
@@ -183,15 +208,22 @@ impl<T: TpmOps> Authenticator<T> {
         result.unwrap_or_else(error)
     }
 
+    /// Reset and selection only need presence: a fingerprint touch, or a presence
+    /// confirmation for users without an enrolled fingerprint (AD-022).
     fn need_gesture(uid: Uid, user: UserInfo, prompt: &str, kind: PendingKind) -> Parsed<Step> {
-        if !user.uv_enrolled {
-            return Err(status::NOT_ALLOWED);
-        }
-        Ok(Step::NeedUv(Box::new(Pending {
-            uid,
-            rp_id: prompt.to_owned(),
-            kind,
-        })))
+        let pending = |presence_only| {
+            Box::new(Pending {
+                uid,
+                rp_id: prompt.to_owned(),
+                kind,
+                presence_only,
+            })
+        };
+        Ok(if user.uv_enrolled {
+            Step::NeedUv(pending(false))
+        } else {
+            Step::NeedPresence(pending(true))
+        })
     }
 
     pub(super) fn pin_is_set(&mut self, uid: Uid) -> Parsed<bool> {

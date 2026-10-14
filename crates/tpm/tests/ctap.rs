@@ -47,6 +47,7 @@ fn with_touch(a: &mut Authenticator<TpmBackend>, request: &[u8]) -> Vec<u8> {
             UvOutcome::Matched(UvEvidence::from_fprintd_match(ALICE.0)),
             1_000,
         ),
+        Step::NeedPresence(p) => panic!("expected a fingerprint prompt for {}", p.rp_id()),
         Step::Done(r) => panic!("expected a prompt, got status {:#04x}", r[0]),
     }
 }
@@ -98,7 +99,7 @@ fn hmac_secret_input(a: &mut Authenticator<TpmBackend>) -> Value {
         1_000,
     ) {
         Step::Done(r) => body(&r),
-        Step::NeedUv(_) => panic!("getKeyAgreement needs no prompt"),
+        Step::NeedUv(_) | Step::NeedPresence(_) => panic!("getKeyAgreement needs no prompt"),
     };
     let auth_key = parse_platform_key(resp.map_get(&int(1)).expect("key")).expect("COSE key");
     let key = KeyAgreement::generate().expect("key agreement");

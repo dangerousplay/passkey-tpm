@@ -177,6 +177,10 @@ impl<T: TpmOps> Authenticator<T> {
     /// UV, so the uvRetries limit applies; otherwise a PIN token already gave UV and the
     /// match only proves presence (the PIN stays a fallback for blocked UV). A blocked PIN
     /// stops both (HARD-04, AD-010).
+    ///
+    /// Without an enrolled fingerprint, presence comes from a confirmation the broker asks
+    /// for ([`Step::NeedPresence`], AD-022) — but only where nothing else is missing: UV
+    /// already proven by the token, or a touch-to-select that needs no UV.
     pub(super) fn gesture(
         &mut self,
         uid: Uid,
@@ -186,8 +190,20 @@ impl<T: TpmOps> Authenticator<T> {
         fingerprint_uv: bool,
     ) -> Parsed<Step> {
         if !user.uv_enrolled {
-            // Presence is a fingerprint touch; without a reader no gesture is possible (MVP-2).
-            return Err(status::NOT_ALLOWED);
+            let touch_to_select = matches!(kind, PendingKind::TouchThen(_));
+            if fingerprint_uv && !touch_to_select {
+                // The request needs UV and there is no fingerprint to give it.
+                return Err(status::NOT_ALLOWED);
+            }
+            if !fingerprint_uv {
+                self.check_pin_not_blocked(uid)?;
+            }
+            return Ok(Step::NeedPresence(Box::new(Pending {
+                uid,
+                rp_id: rp_id.to_owned(),
+                kind,
+                presence_only: true,
+            })));
         }
         if fingerprint_uv {
             self.check_builtin_uv(uid)?;
@@ -198,6 +214,7 @@ impl<T: TpmOps> Authenticator<T> {
             uid,
             rp_id: rp_id.to_owned(),
             kind,
+            presence_only: false,
         })))
     }
 

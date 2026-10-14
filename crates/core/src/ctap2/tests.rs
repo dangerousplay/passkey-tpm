@@ -248,14 +248,25 @@ fn prep(a: &mut A, uid: Uid, request: &[u8]) -> Step {
 fn need_uv(step: Step) -> Box<super::Pending> {
     match step {
         Step::NeedUv(p) => p,
+        Step::NeedPresence(p) => panic!("expected NeedUv, got NeedPresence for {}", p.rp_id()),
         Step::Done(r) => panic!("expected NeedUv, got status {:#04x}", r[0]),
+    }
+}
+
+fn need_presence(step: Step) -> Box<super::Pending> {
+    match step {
+        Step::NeedPresence(p) => p,
+        Step::NeedUv(p) => panic!("expected NeedPresence, got NeedUv for {}", p.rp_id()),
+        Step::Done(r) => panic!("expected NeedPresence, got status {:#04x}", r[0]),
     }
 }
 
 fn done(step: Step) -> Vec<u8> {
     match step {
         Step::Done(r) => r,
-        Step::NeedUv(p) => panic!("unexpected NeedUv for {}", p.rp_id()),
+        Step::NeedUv(p) | Step::NeedPresence(p) => {
+            panic!("unexpected prompt for {}", p.rp_id())
+        }
     }
 }
 
@@ -580,6 +591,179 @@ fn set_pin_then_token_using_pin_needs_presence_gesture() {
         let resp = body(&touch(&mut a, ALICE, step));
         assert_eq!(get(&resp, 2).and_then(Value::as_bytes).unwrap()[32], 0x45);
     }
+}
+
+// ------------------------------------------------- no fingerprint: PIN + presence (AD-022)
+
+/// A PIN token for makeCredential + getAssertion on [`RP`], and the platform that got it.
+fn pin_token(a: &mut A) -> (Platform, [u8; 32]) {
+    set_pin(a, ALICE, Protocol::Two);
+    let p = Platform::new(a, ALICE, Protocol::Two);
+    let token = p.decrypt_token(&done(prep(
+        a,
+        ALICE,
+        &p.token_using_pin(PIN, 0x03, Some(RP)),
+    )));
+    (p, token)
+}
+
+fn mc_with(p: &Platform, token: &[u8; 32]) -> Vec<u8> {
+    req(
+        cmd::MAKE_CREDENTIAL,
+        mc_params(vec![
+            (int(8), p.auth_param(token, &[9; 32])),
+            (int(9), Value::Uint(2)),
+        ]),
+    )
+}
+
+fn ga_with(p: &Platform, token: &[u8; 32], allow: Vec<Value>) -> Vec<u8> {
+    req(
+        cmd::GET_ASSERTION,
+        ga_params(
+            Some(allow),
+            vec![
+                (int(6), p.auth_param(token, &[8; 32])),
+                (int(7), Value::Uint(2)),
+            ],
+        ),
+    )
+}
+
+#[test]
+fn without_fingerprint_pin_and_presence_register_and_sign() {
+    let mut a = auth();
+    let (p, token) = pin_token(&mut a);
+    let pending = need_presence(a.prepare(ALICE, NO_READER, &mc_with(&p, &token), 1_000));
+    assert_eq!(pending.rp_id(), RP);
+    let resp = body(&a.complete(pending, UvOutcome::Present, 1_000));
+    let auth_data = get(&resp, 2).and_then(Value::as_bytes).unwrap();
+    assert_eq!(auth_data[32], 0x45, "UP + UV + AT");
+    let id = cred_id_from_auth_data(auth_data);
+
+    let pending = need_presence(a.prepare(
+        ALICE,
+        NO_READER,
+        &ga_with(&p, &token, vec![descriptor(&id)]),
+        1_000,
+    ));
+    let resp = body(&a.complete(pending, UvOutcome::Present, 1_000));
+    assert_eq!(get(&resp, 2).and_then(Value::as_bytes).unwrap()[32], 0x05);
+    // Both signatures went through the UV gate (the PIN is not a policy branch, ADR 0003).
+    let gates: Vec<GateKind> = a.tpm_mut().signed.iter().map(|s| s.1).collect();
+    assert_eq!(gates, vec![GateKind::Uv, GateKind::Uv]);
+}
+
+#[test]
+fn without_fingerprint_refused_presence_signs_nothing() {
+    for (outcome, code) in [
+        (UvOutcome::Denied, status::OPERATION_DENIED),
+        (UvOutcome::Cancelled, status::KEEPALIVE_CANCEL),
+        (UvOutcome::TimedOut, status::USER_ACTION_TIMEOUT),
+        (UvOutcome::Unavailable, status::NOT_ALLOWED),
+        (
+            UvOutcome::Matched(UvEvidence::from_fprintd_match(BOB.0)),
+            status::OPERATION_DENIED,
+        ),
+    ] {
+        let mut a = auth();
+        let (p, token) = pin_token(&mut a);
+        let pending = need_presence(a.prepare(ALICE, NO_READER, &mc_with(&p, &token), 1_000));
+        assert_eq!(a.complete(pending, outcome, 1_000), vec![code]);
+        assert!(a.tpm_mut().signed.is_empty());
+        // Refusals are not UV failures.
+        assert_eq!(a.user(ALICE).uv_failures, 0);
+    }
+}
+
+#[test]
+fn presence_never_completes_a_fingerprint_request() {
+    let mut a = auth();
+    for request in [
+        req(cmd::MAKE_CREDENTIAL, mc_params(vec![])),
+        req(cmd::SELECTION, vec![]),
+    ] {
+        let pending = need_uv(prep(&mut a, ALICE, &request));
+        assert_eq!(
+            a.complete(pending, UvOutcome::Present, 1_000),
+            vec![status::OPERATION_DENIED]
+        );
+    }
+    let p = Platform::new(&mut a, ALICE, Protocol::Two);
+    let pending = need_uv(prep(&mut a, ALICE, &p.token_using_uv(0x03, RP)));
+    assert_eq!(
+        a.complete(pending, UvOutcome::Present, 1_000),
+        vec![status::OPERATION_DENIED]
+    );
+    assert!(a.tpm_mut().signed.is_empty());
+}
+
+#[test]
+fn without_fingerprint_uv_is_never_assumed() {
+    let mut a = auth();
+    let mc = req(cmd::MAKE_CREDENTIAL, mc_params(vec![]));
+    let ga = req(cmd::GET_ASSERTION, ga_params(None, vec![]));
+    // No PIN: nothing can give UV.
+    assert_eq!(
+        done(a.prepare(ALICE, NO_READER, &mc, 0)),
+        vec![status::NOT_ALLOWED]
+    );
+    // PIN set: the platform must use it.
+    set_pin(&mut a, ALICE, Protocol::Two);
+    assert_eq!(
+        done(a.prepare(ALICE, NO_READER, &mc, 0)),
+        vec![status::PUAT_REQUIRED]
+    );
+    assert_eq!(
+        done(a.prepare(ALICE, NO_READER, &ga, 0)),
+        vec![status::PUAT_REQUIRED]
+    );
+    // Built-in UV token: there is none.
+    let p = Platform::new(&mut a, ALICE, Protocol::Two);
+    assert_eq!(
+        done(a.prepare(ALICE, NO_READER, &p.token_using_uv(0x03, RP), 0)),
+        vec![status::NOT_ALLOWED]
+    );
+}
+
+#[test]
+fn without_fingerprint_select_touch_and_reset_need_presence() {
+    let mut a = auth();
+    let selection = need_presence(a.prepare(ALICE, NO_READER, &req(cmd::SELECTION, vec![]), 0));
+    assert_eq!(
+        a.complete(selection, UvOutcome::Present, 0),
+        vec![status::OK]
+    );
+
+    let touch_to_select = req(
+        cmd::MAKE_CREDENTIAL,
+        mc_params(vec![
+            (int(8), Value::Bytes(Vec::new())),
+            (int(9), Value::Uint(2)),
+        ]),
+    );
+    let pending = need_presence(a.prepare(ALICE, NO_READER, &touch_to_select, 0));
+    assert_eq!(
+        a.complete(pending, UvOutcome::Present, 0),
+        vec![status::PIN_NOT_SET]
+    );
+
+    let reset = need_presence(a.prepare(ALICE, NO_READER, &req(cmd::RESET, vec![]), 0));
+    assert_eq!(
+        a.complete(reset, UvOutcome::Denied, 0),
+        vec![status::OPERATION_DENIED]
+    );
+}
+
+#[test]
+fn without_fingerprint_blocked_pin_stops_before_prompting() {
+    let mut a = auth();
+    let (p, token) = pin_token(&mut a);
+    a.tpm_mut().set_pin_retries(ALICE, 0).unwrap();
+    assert_eq!(
+        done(a.prepare(ALICE, NO_READER, &mc_with(&p, &token), 1_000)),
+        vec![status::PIN_BLOCKED]
+    );
 }
 
 #[test]
