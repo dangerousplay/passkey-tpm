@@ -20,6 +20,8 @@ the laptop: no USB key to carry, and the private keys never leave the TPM.
   and other users on the same machine can't use them.
 - Discoverable passkeys ("sign in without typing a username"), passkey management from the
   browser, and `hmac-secret` (used by disk unlocking and password managers).
+- A tray icon that shows whether the fingerprint reader, the background service and the
+  virtual security key are working, and enrolls a new fingerprint in one click.
 
 ## Requirements
 
@@ -45,8 +47,9 @@ Each release also has `checksums.txt` and a source tarball. Distribution reposit
 
 ## Set up
 
-1. Enroll a fingerprint, if you haven't already. Use your desktop's settings (GNOME: *Settings
-   → Users → Fingerprint Login*) or:
+1. Enroll a fingerprint, if you haven't already: pick *Enroll new fingerprint* in the
+   passkey-tpm tray icon, use your desktop's settings (GNOME: *Settings → Users →
+   Fingerprint Login*) or run:
 
    ```sh
    fprintd-enroll
@@ -65,6 +68,12 @@ Each release also has `checksums.txt` and a source tarball. Distribution reposit
    ```
 
 The background service (`passkey-tpm-uvd`) starts on demand; there is nothing else to enable.
+
+The tray icon (`passkey-tpm-tray`) starts with your desktop session. It is blue when
+everything works and orange when something needs attention; hover it to see what. It needs a
+StatusNotifierItem tray: KDE Plasma, Xfce, Cinnamon, waybar and most panels have one; on GNOME
+install the *AppIndicator and KStatusNotifierItem Support* extension. Start it by hand with
+`passkey-tpm-tray &`.
 
 ## Use
 
@@ -111,7 +120,7 @@ all of *your* passkeys and your PIN; it doesn't affect other users.
 |---|---|
 | Browser says no security key found | `systemctl --user status passkey-tpm-agent`; `ls -l /dev/uhid` (the package loads the `uhid` module; reboot once after installing if it's missing) |
 | Fingerprint never accepted | `fprintd-verify` works? Enroll again with `fprintd-enroll` |
-| Not sure what's wrong | `passkey-tpm info` checks the TPM, `/dev/uhid`, fprintd and both services |
+| Not sure what's wrong | Hover the tray icon, or `passkey-tpm info` checks the TPM, `/dev/uhid`, fprintd and both services |
 | "TPM not available" | `passkey-tpm tpm status`; enable the TPM / fTPM / PTT in the firmware settings |
 | PIN locked or TPM lockout | wait for the TPM lockout to expire (usually minutes to hours), or reset the security key |
 

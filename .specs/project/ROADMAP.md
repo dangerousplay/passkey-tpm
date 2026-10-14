@@ -158,6 +158,10 @@ Each MVP is a usable, demoable cut of a milestone. Later milestones harden and w
 
 - Implement the agreed provider D-Bus interface; the UI is delegated to credentialsd-ui; works with sandboxed apps through the Credentials portal
 
+**Tray icon** - DONE (real-desktop UAT pending) (spec: `.specs/features/tray/`, AD-021)
+
+- `passkey-tpm-tray`: reader / broker / virtual-key status; "Enroll new fingerprint" through fprintd + polkit
+
 **Management UI** - PLANNED
 
 - A libadwaita app (or GNOME/KDE settings panels): list and delete passkeys, change the PIN, view status

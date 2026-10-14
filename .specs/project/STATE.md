@@ -1,6 +1,6 @@
 # State
 
-**Last Updated:** 2026-10-04
+**Last Updated:** 2026-10-13
 **Current Work:** `v0.1.0-beta.1` published as a public pre-release (signed packages, provenance, git-cliff notes with known issues) from branch `release/v0.1.0`; collecting tester feedback. Next: hardening HARD-07/10/13 (G2–G4 decisions), HARD-16; VM smoke test of the released `.deb`; then the CTAP crates (Discuss C-G1..C-G5).
 
 ---
@@ -143,6 +143,13 @@
 **Reason:** the hidraw node's `uaccess` ACL follows the seat user, so after a fast user switch, another user could drive the background user's agent (HARD-01). Destroying the device also invalidates descriptors opened before the switch.
 **Trade-off:** no use from seatless sessions (SSH); requires logind.
 **Impact:** `passkey_tpm_uv::seat`; `Broker::new` takes a `SessionPolicy`; VM scenarios log users in on VTs and switch with `chvt`.
+
+### AD-021: Tray icon = separate `passkey-tpm-tray` binary on ksni; enrollment through fprintd's polkit (2026-10-13)
+
+**Decision:** A StatusNotifierItem in its own crate/binary (XDG autostart), built on `ksni` 0.3 with a `deny.toml` license exception scoped to ksni (Unlicense). It shows reader / broker / virtual-key status and enrolls the next free finger with `Claim("")` + `EnrollStart`, so fprintd's `net.reactivated.fprint.device.enroll` polkit action authorises it. Spec: `.specs/features/tray/`.
+**Reason:** Keeps the agent headless (a crash or missing SNI host can't remove the virtual key); ksni uses the same zbus/tokio stack; no new broker API or polkit grant is needed (broker reachability uses `Introspect`, which the bus policy already allows).
+**Trade-off:** One more binary and an Unlicense dependency; GNOME needs the AppIndicator extension; the tray is spoofable by same-user malware (threat model).
+**Impact:** `passkey_tpm_uv::fprintd::{enroll, enrolled_fingers}`; packaging installs `/usr/bin/passkey-tpm-tray` and `/etc/xdg/autostart/passkey-tpm-tray.desktop`.
 
 ---
 
@@ -302,6 +309,7 @@
 - [ ] Trusted-prompt feasibility (broker-driven prompt vs credentialsd-ui)
 - [x] ADR-004: ctap-types vs passkey-types — neither; publish our own (AD-018, 2026-10-04)
 - [ ] Contact linux-credentials maintainers
+- [ ] Tray: try on KDE Plasma and GNOME + AppIndicator with a real reader (polkit enroll dialog, notifications); add a VM scenario with the libfprint virtual device
 - [ ] Re-check UNVERIFIED items in the research docs before design
 
 ---

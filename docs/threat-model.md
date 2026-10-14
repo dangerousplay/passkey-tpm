@@ -40,6 +40,10 @@ browser / libfido2 ──hidraw/uhid──▶ passkey-tpm-agent (user, untrusted
 - **Prompt spoofing (T2).** The agent shows prompts in the user session, so same-user malware
   could get a gesture approved for a different relying party than the one shown. Tracked for
   M4 (broker-driven or credentialsd-ui prompt).
+- **The tray icon is informational.** `passkey-tpm-tray` runs as the user, so same-user malware
+  can fake its status or its enrollment notifications. It holds no secrets; enrolling a finger
+  goes through fprintd's own polkit action (`net.reactivated.fprint.device.enroll`), so the
+  tray can't enroll anything the user couldn't enroll with `fprintd-enroll`.
 - **TPM DA lockout is machine-wide.** T1 can trigger it with its own objects, which blocks the PIN
   path for everyone; fingerprint and presence keep working (`noDA` gates).
 - fprintd matching is not attested to the TPM; the broker is the UV enforcement point.
