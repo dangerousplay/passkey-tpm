@@ -156,7 +156,7 @@ Limitations you should know about:
 - Passkeys can't be backed up or moved. If the TPM is cleared or the motherboard replaced,
   they're gone, so always register a second sign-in method.
 
-Details: [how it works, with diagrams](docs/architecture.md), [threat model](docs/threat-model.md) and [TPM policy design](docs/adr/0003-tpm-policy-model.md).
+Details: [documentation site](https://dangerousplay.github.io/passkey-tpm/), [how it works, with diagrams](docs/architecture.md), [threat model](docs/threat-model.md) and [TPM policy design](docs/adr/0003-tpm-policy-model.md).
 
 ## Uninstall
 

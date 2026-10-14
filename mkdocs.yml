@@ -1,0 +1,45 @@
+# Documentation site (GitHub Pages): https://dangerousplay.github.io/passkey-tpm/
+# Build locally: uvx --with-requirements docs/requirements.txt mkdocs serve
+site_name: passkey-tpm
+site_description: Passkeys (FIDO2/WebAuthn) for Linux, kept in the TPM 2.0 and unlocked with your fingerprint or a PIN.
+site_url: https://dangerousplay.github.io/passkey-tpm/
+repo_url: https://github.com/dangerousplay/passkey-tpm
+repo_name: dangerousplay/passkey-tpm
+edit_uri: edit/main/docs/
+docs_dir: docs
+strict: true
+exclude_docs: |
+  requirements.txt
+  diagrams/src/
+  diagrams/theme/
+  diagrams/theme-wide/
+  diagrams/render.sh
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue
+      toggle: {icon: material/brightness-7, name: Dark mode}
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue
+      toggle: {icon: material/brightness-4, name: Light mode}
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc: {permalink: true}
+
+nav:
+  - Home: index.md
+  - How it works: architecture.md
+  - Threat model: threat-model.md
+  - Design decisions:
+      - ADR 0001 Rust and a verified core: adr/0001-rust-verified-core.md
+      - ADR 0002 Provider and uhid: adr/0002-provider-and-uhid.md
+      - ADR 0003 TPM policy model: adr/0003-tpm-policy-model.md

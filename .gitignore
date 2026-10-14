@@ -6,3 +6,4 @@
 **/*.rs.bk
 __pycache__/
 *.pyc
+/site/
