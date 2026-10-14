@@ -12,8 +12,8 @@ use std::time::Duration;
 use ksni::menu::StandardItem;
 use ksni::{Category, Icon, MenuItem, Status, ToolTip, TrayMethods};
 use passkey_tpm_tray::{
-    finger_label, fingerprint_pixmap, health_colour, probe, EnrollTracker, Health, Message,
-    Snapshot,
+    dialog, finger_label, fingerprint_pixmap, health_colour, pin, probe, EnrollTracker, Health,
+    Message, PinAction, PinState, Snapshot,
 };
 use passkey_tpm_uv::fprintd;
 use tokio::sync::mpsc;
@@ -35,6 +35,8 @@ enum Command {
     Enroll(&'static str),
     CancelEnroll,
     EnrollDone,
+    Pin(PinAction),
+    PinDone,
     Quit,
 }
 
@@ -128,6 +130,7 @@ impl ksni::Tray for TrayApp {
             info_item(self.snapshot.reader_line()),
             info_item(self.snapshot.broker_line()),
             info_item(self.snapshot.key_line()),
+            info_item(self.snapshot.pin_line()),
             MenuItem::Separator,
         ];
         match (self.enrolling, self.snapshot.enroll_target()) {
@@ -151,6 +154,21 @@ impl ksni::Tray for TrayApp {
             ),
             (None, Some(None)) => items.push(info_item("All fingers enrolled".into())),
             (None, None) => {}
+        }
+        if let Some(action) = self.snapshot.pin_action() {
+            let label = match action {
+                PinAction::Set => "Set PIN…",
+                PinAction::Change => "Change PIN…",
+            };
+            items.push(
+                StandardItem {
+                    label: label.into(),
+                    icon_name: "dialog-password".into(),
+                    activate: Box::new(move |t: &mut Self| t.send(Command::Pin(action))),
+                    ..Default::default()
+                }
+                .into(),
+            );
         }
         items.extend([
             StandardItem {
@@ -205,20 +223,100 @@ fn notifier() -> std_mpsc::Sender<Note> {
     tx
 }
 
+/// `full` also asks the broker whether a PIN is set; periodic refreshes reuse the known
+/// answer (each broker request is an audit line in its journal).
 fn spawn_refresh(
     system: Option<Connection>,
     session: Option<Connection>,
     handle: ksni::Handle<TrayApp>,
     busy: Arc<tokio::sync::Mutex<()>>,
+    full: bool,
 ) {
     tokio::spawn(async move {
-        // One refresh at a time; a request during a refresh is covered by it.
-        let Ok(_guard) = busy.try_lock() else {
-            return;
+        // One refresh at a time. A periodic one during another refresh is covered by it; a
+        // full one waits so it sees the latest PIN state.
+        let _guard = if full {
+            busy.lock().await
+        } else {
+            let Ok(guard) = busy.try_lock() else {
+                return;
+            };
+            guard
         };
-        let snapshot = probe::snapshot(system.as_ref(), session.as_ref()).await;
+        let known_pin = if full {
+            None
+        } else {
+            handle
+                .update(|t| t.snapshot.pin.clone())
+                .await
+                .filter(|p| matches!(p, PinState::Set | PinState::NotSet))
+        };
+        let snapshot = probe::snapshot(system.as_ref(), session.as_ref(), known_pin).await;
         handle.update(|t| t.snapshot = snapshot).await;
     });
+}
+
+/// Asks for the PIN(s) and runs setPIN or changePIN through the broker.
+fn spawn_pin(
+    system: Connection,
+    action: PinAction,
+    notes: std_mpsc::Sender<Note>,
+    tx: mpsc::UnboundedSender<Command>,
+) {
+    tokio::spawn(async move {
+        if let Some(message) = pin_flow(&system, action).await {
+            let _ = notes.send(Note {
+                message,
+                replace: false,
+            });
+        }
+        let _ = tx.send(Command::PinDone);
+    });
+}
+
+/// The notification to show after a PIN action, `None` if the user cancelled.
+async fn pin_flow(system: &Connection, action: PinAction) -> Option<Message> {
+    let change = action == PinAction::Change;
+    let failed = |body: String| {
+        Some((
+            if change {
+                "PIN not changed"
+            } else {
+                "PIN not set"
+            }
+            .to_owned(),
+            body,
+        ))
+    };
+    let entry = match dialog::ask(change).await {
+        Ok(e) => e,
+        Err(dialog::DialogError::Cancelled) => return None,
+        Err(dialog::DialogError::NoHelper) => {
+            return failed(
+                "Install zenity or kdialog to enter a PIN from the tray, or set it from your \
+                 browser's security key settings."
+                    .to_owned(),
+            );
+        }
+        Err(dialog::DialogError::Failed(e)) => {
+            return failed(format!("The PIN dialog failed: {e}"));
+        }
+    };
+    if let Err(problem) = pin::check_new_pin(&entry.new, &entry.confirm) {
+        return failed(problem);
+    }
+    let result = if change {
+        pin::change(system, &entry.current, &entry.new).await
+    } else {
+        pin::set(system, &entry.new).await
+    };
+    match result {
+        Ok(()) => Some((
+            if change { "PIN changed" } else { "PIN set" }.to_owned(),
+            "Websites will ask for this PIN when you use a passkey.".to_owned(),
+        )),
+        Err(e) => failed(e.describe()),
+    }
 }
 
 fn spawn_enroll(
@@ -281,21 +379,23 @@ async fn main() -> ExitCode {
 
     let notes = notifier();
     let busy = Arc::new(tokio::sync::Mutex::new(()));
-    let refresh = || {
+    let refresh = |full: bool| {
         spawn_refresh(
             system.clone(),
             session.clone(),
             handle.clone(),
             busy.clone(),
+            full,
         );
     };
     let mut cancel: Option<CancellationToken> = None;
+    let mut pin_busy = false;
     let mut tick = tokio::time::interval(REFRESH);
     loop {
         tokio::select! {
-            _ = tick.tick() => refresh(),
+            _ = tick.tick() => refresh(false),
             command = rx.recv() => match command {
-                Some(Command::Refresh) => refresh(),
+                Some(Command::Refresh) => refresh(true),
                 Some(Command::Enroll(finger)) => {
                     let Some(system) = system.clone() else { continue };
                     if cancel.is_some() {
@@ -314,7 +414,19 @@ async fn main() -> ExitCode {
                 Some(Command::EnrollDone) => {
                     cancel = None;
                     handle.update(|t| t.enrolling = None).await;
-                    refresh();
+                    refresh(true);
+                }
+                Some(Command::Pin(action)) => {
+                    let Some(system) = system.clone() else { continue };
+                    if pin_busy {
+                        continue;
+                    }
+                    pin_busy = true;
+                    spawn_pin(system, action, notes.clone(), tx.clone());
+                }
+                Some(Command::PinDone) => {
+                    pin_busy = false;
+                    refresh(true);
                 }
                 Some(Command::Quit) | None => break,
             },

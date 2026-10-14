@@ -8,7 +8,7 @@ use passkey_tpm_uv::fprintd;
 use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 use zbus::Connection;
 
-use crate::{Broker, Reader, Snapshot, VirtualKey};
+use crate::{Broker, PinState, Reader, Snapshot, VirtualKey};
 
 /// Upper bound for one probe.
 pub const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -114,20 +114,48 @@ pub async fn virtual_key(session: Option<&Connection>) -> VirtualKey {
     bounded(probe).await.unwrap_or_else(VirtualKey::Unknown)
 }
 
-/// Runs the three probes concurrently.
-pub async fn snapshot(system: Option<&Connection>, session: Option<&Connection>) -> Snapshot {
+/// Whether the calling user has a PIN, asked through the broker (getInfo). Runs a broker
+/// request (and an audit line in its journal), so it isn't part of the periodic refresh.
+pub async fn pin(system: &Connection) -> PinState {
+    match bounded(async { crate::pin::is_set(system).await.map_err(|e| e.describe()) }).await {
+        Ok(true) => PinState::Set,
+        Ok(false) => PinState::NotSet,
+        Err(e) => PinState::Unknown(e),
+    }
+}
+
+/// Runs the probes concurrently. `known_pin`: reuse this PIN state instead of asking the
+/// broker (periodic refreshes).
+pub async fn snapshot(
+    system: Option<&Connection>,
+    session: Option<&Connection>,
+    known_pin: Option<PinState>,
+) -> Snapshot {
     let Some(system) = system else {
         let reason = "no system bus".to_owned();
         return Snapshot {
             reader: Reader::Missing(reason.clone()),
-            broker: Broker::Unreachable(reason),
+            broker: Broker::Unreachable(reason.clone()),
             key: virtual_key(session).await,
+            pin: PinState::Unknown(reason),
         };
     };
-    let (reader, broker, key) = tokio::join!(reader(system), broker(system), virtual_key(session));
+    let pin_probe = async {
+        match known_pin {
+            Some(p) => p,
+            None => pin(system).await,
+        }
+    };
+    let (reader, broker, key, pin) = tokio::join!(
+        reader(system),
+        broker(system),
+        virtual_key(session),
+        pin_probe
+    );
     Snapshot {
         reader,
         broker,
         key,
+        pin,
     }
 }

@@ -8,6 +8,8 @@
 //! spoof it. It holds no secrets; fprintd's polkit action authorises enrollment.
 #![forbid(unsafe_code)]
 
+pub mod dialog;
+pub mod pin;
 pub mod probe;
 
 use passkey_tpm_uv::fprintd::{EnrollProgress, EnrollResult};
@@ -81,6 +83,19 @@ pub enum VirtualKey {
     Unknown(String),
 }
 
+/// The calling user's security-key PIN.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PinState {
+    /// Not probed yet.
+    Checking,
+    /// A PIN is set.
+    Set,
+    /// No PIN yet.
+    NotSet,
+    /// The broker couldn't tell (the reason).
+    Unknown(String),
+}
+
 /// Everything the tray shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Snapshot {
@@ -90,6 +105,8 @@ pub struct Snapshot {
     pub broker: Broker,
     /// Virtual key.
     pub key: VirtualKey,
+    /// PIN.
+    pub pin: PinState,
 }
 
 impl Default for Snapshot {
@@ -98,8 +115,18 @@ impl Default for Snapshot {
             reader: Reader::Checking,
             broker: Broker::Checking,
             key: VirtualKey::Checking,
+            pin: PinState::Checking,
         }
     }
+}
+
+/// What the PIN menu item does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinAction {
+    /// clientPIN setPIN.
+    Set,
+    /// clientPIN changePIN.
+    Change,
 }
 
 /// Overall state, driving the item status, icon colour and tooltip.
@@ -114,23 +141,34 @@ pub enum Health {
 }
 
 impl Snapshot {
+    /// Whether the user has at least one enrolled fingerprint.
+    #[must_use]
+    pub fn has_fingerprint(&self) -> bool {
+        matches!(&self.reader, Reader::Present { enrolled: Some(f), .. } if !f.is_empty())
+    }
+
     /// The overall state. Problems are reported in order: reader, enrolled fingers, broker,
-    /// virtual key. An unknown virtual-key state is not a problem (non-systemd sessions).
+    /// virtual key. Without a fingerprint a PIN is enough (AD-022), so the reader problems
+    /// only count while no PIN is set. An unknown virtual-key state is not a problem
+    /// (non-systemd sessions).
     #[must_use]
     pub fn health(&self) -> Health {
         if self.reader == Reader::Checking
             || self.broker == Broker::Checking
             || self.key == VirtualKey::Checking
+            || self.pin == PinState::Checking
         {
             return Health::Checking;
         }
+        let pin_only = self.pin == PinState::Set;
         let problem = match &self.reader {
-            Reader::Missing(_) => Some("No fingerprint reader detected"),
+            _ if pin_only => None,
+            Reader::Missing(_) => Some("No fingerprint reader detected; set a PIN instead"),
             Reader::Present { enrolled: None, .. } => Some("Cannot list enrolled fingerprints"),
             Reader::Present {
                 enrolled: Some(fingers),
                 ..
-            } if fingers.is_empty() => Some("No fingerprint enrolled"),
+            } if fingers.is_empty() => Some("No fingerprint or PIN set up"),
             _ => None,
         }
         .or(match self.broker {
@@ -173,6 +211,29 @@ impl Snapshot {
             Broker::Unreachable(_) => "Broker: unreachable",
         }
         .to_owned()
+    }
+
+    /// Menu line for the PIN.
+    #[must_use]
+    pub fn pin_line(&self) -> String {
+        match self.pin {
+            PinState::Checking => "PIN: checking…",
+            PinState::Set if !self.has_fingerprint() => "PIN: set (used instead of a fingerprint)",
+            PinState::Set => "PIN: set",
+            PinState::NotSet => "PIN: not set",
+            PinState::Unknown(_) => "PIN: unknown",
+        }
+        .to_owned()
+    }
+
+    /// The PIN item, once the broker said whether a PIN is set.
+    #[must_use]
+    pub fn pin_action(&self) -> Option<PinAction> {
+        match self.pin {
+            PinState::Set => Some(PinAction::Change),
+            PinState::NotSet => Some(PinAction::Set),
+            PinState::Checking | PinState::Unknown(_) => None,
+        }
     }
 
     /// Menu line for the virtual key.
@@ -370,6 +431,7 @@ mod tests {
             },
             broker: Broker::Reachable,
             key: VirtualKey::Active,
+            pin: PinState::NotSet,
         }
     }
 
@@ -430,13 +492,29 @@ mod tests {
         };
         assert_eq!(
             s.health(),
-            Health::Problem("No fingerprint enrolled".to_owned())
+            Health::Problem("No fingerprint or PIN set up".to_owned())
         );
         s.reader = Reader::Missing("no device".to_owned());
         assert_eq!(
             s.health(),
-            Health::Problem("No fingerprint reader detected".to_owned())
+            Health::Problem("No fingerprint reader detected; set a PIN instead".to_owned())
         );
+    }
+
+    #[test]
+    fn pin_replaces_the_fingerprint() {
+        let mut s = ready();
+        s.reader = Reader::Missing("no device".to_owned());
+        s.pin = PinState::Set;
+        assert_eq!(s.health(), Health::Ready);
+        assert_eq!(s.pin_line(), "PIN: set (used instead of a fingerprint)");
+        assert_eq!(s.pin_action(), Some(PinAction::Change));
+        s.pin = PinState::NotSet;
+        assert_eq!(s.pin_action(), Some(PinAction::Set));
+        s.pin = PinState::Checking;
+        assert_eq!(s.health(), Health::Checking);
+        assert_eq!(s.pin_action(), None);
+        assert_eq!(ready().pin_line(), "PIN: not set");
     }
 
     #[test]
@@ -452,6 +530,7 @@ mod tests {
             reader: Reader::Missing("x".to_owned()),
             broker: Broker::Unreachable("x".to_owned()),
             key: VirtualKey::Inactive("inactive".to_owned()),
+            pin: PinState::Unknown("x".to_owned()),
         };
         assert_eq!(s.reader_line(), "Fingerprint reader: not detected");
         assert_eq!(s.broker_line(), "Broker: unreachable");
