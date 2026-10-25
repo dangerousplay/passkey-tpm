@@ -9,7 +9,7 @@ publish = false
 
 [dependencies]
 tss-esapi = "7.7"
-zbus = { version = "5.19", default-features = false, features = ["tokio"] }
+zbus = { version = "6.0", default-features = false, features = ["tokio"] }
 
 [lints]
 workspace = true

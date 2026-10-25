@@ -10,7 +10,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-zbus = { version = "5.19", default-features = false, features = ["tokio"] }
+zbus = { version = "6.0", default-features = false, features = ["tokio"] }
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
 tokio-util = "0.7"
 nix = { version = "0.31", default-features = false, features = ["user"] }
