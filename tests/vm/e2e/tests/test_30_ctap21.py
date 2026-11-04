@@ -65,6 +65,25 @@ def test_make_discoverable_credential_with_pin_token(s):
     s.pub = CoseKey.parse(s.cred.public_key)
 
 
+def test_silent_probe_like_firefox(s):
+    """authenticator-rs filters the allowList with up=false and the PIN token (issue #5)."""
+    token = s.cp.get_pin_token(PIN, P.GET_ASSERTION, RP["id"])
+    cdh = hashlib.sha256(b"").digest()
+    allow = [{"type": "public-key", "id": s.cred.credential_id}]
+    a = s.ctap.get_assertion(
+        RP["id"], cdh, allow,
+        options={"up": False},
+        pin_uv_param=s.protocol.authenticate(token, cdh),
+        pin_uv_protocol=s.protocol.VERSION,
+    )
+    s.pub.verify(a.auth_data + cdh, a.signature)
+    assert a.auth_data.is_user_verified() and not a.auth_data.is_user_present()
+    # Without a token nothing is revealed, not even that the credential exists.
+    with pytest.raises(CtapError) as e:
+        s.ctap.get_assertion(RP["id"], cdh, allow, options={"up": False})
+    assert e.value.code == CtapError.ERR.NO_CREDENTIALS
+
+
 def test_discoverable_assertion_and_deterministic_hmac_secret(s):
     salts = os.urandom(32)
     outputs = []

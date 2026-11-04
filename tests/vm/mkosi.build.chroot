@@ -3,6 +3,9 @@
 # through `cargo xtask dist`, exactly as the distribution recipes do.
 set -euxo pipefail
 
+# rustup-init refuses a $HOME that differs from the euid's home directory (mkosi runs this
+# with HOME=/).
+export HOME=/root
 export RUSTUP_HOME="$BUILDDIR/rustup" CARGO_HOME="$BUILDDIR/cargo" CARGO_TARGET_DIR="$BUILDDIR/target"
 toolchain=$(sed -n 's/^channel = "\(.*\)"/\1/p' "$SRCDIR/passkey-tpm/rust-toolchain.toml")
 if [[ ! -x "$CARGO_HOME/bin/cargo" ]]; then
@@ -11,7 +14,7 @@ fi
 export PATH="$CARGO_HOME/bin:$PATH"
 
 cd "$SRCDIR/passkey-tpm"
-cargo build --release --locked -p passkey-tpm-uvd -p passkey-tpm-agent -p passkey-tpm-cli
+cargo build --release --locked -p passkey-tpm-uvd -p passkey-tpm-agent -p passkey-tpm-cli -p passkey-tpm-tray
 cargo build --release --locked -p passkey-tpm-uv --example mock-fprintd --features mock
 CARGO_TARGET_DIR="$BUILDDIR/target" cargo run --release --locked -q -p xtask -- dist --no-build --destdir "$DESTDIR"
 
