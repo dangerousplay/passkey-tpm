@@ -13,14 +13,14 @@ publish = false
 mock = []
 
 [dependencies]
-zbus = { version = "5.19", default-features = false, features = ["tokio"] }
-tokio = { version = "1.53", features = ["rt", "macros", "time", "sync"] }
-tokio-util = "0.7"
-futures-util = { version = "0.3", default-features = false }
-serde = { version = "1", default-features = false }
+zbus = { workspace = true, features = ["tokio"] }
+tokio = { workspace = true, features = ["rt", "macros", "time", "sync"] }
+tokio-util.workspace = true
+futures-util.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
-tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "process"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process"] }
 
 [[test]]
 name = "fprintd"

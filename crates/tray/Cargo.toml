@@ -10,23 +10,23 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-ksni = { version = "0.3", default-features = false, features = ["tokio"] }
-zbus = { version = "5.19", default-features = false, features = ["tokio"] }
-tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "process"] }
-tokio-util = "0.7"
-notify-rust = { version = "4.18", default-features = false, features = ["z"] }
-passkey-tpm-uv = { path = "../uv" }
-passkey-tpm-core = { path = "../core" }
-passkey-tpm-wire = { path = "../wire" }
-sha2 = "0.11"
-zeroize = "1.9"
+ksni = { workspace = true, features = ["tokio"] }
+zbus = { workspace = true, features = ["tokio"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "signal", "process"] }
+tokio-util.workspace = true
+notify-rust = { workspace = true, features = ["z"] }
+passkey-tpm-uv.workspace = true
+passkey-tpm-core.workspace = true
+passkey-tpm-wire.workspace = true
+sha2.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
-passkey-tpm-testkit = { path = "../testkit" }
-passkey-tpm-tpm = { path = "../tpm" }
-passkey-tpm-uvd = { path = "../uvd" }
-passkey-tpm-uv = { path = "../uv", features = ["mock"] }
-tss-esapi = "7.7"
+passkey-tpm-testkit.workspace = true
+passkey-tpm-tpm.workspace = true
+passkey-tpm-uvd.workspace = true
+passkey-tpm-uv = { workspace = true, features = ["mock"] }
+tss-esapi.workspace = true
 
 [lints]
 workspace = true

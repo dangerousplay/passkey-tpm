@@ -10,20 +10,19 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-passkey-tpm-wire = { path = "../wire" }
-sha2 = "0.11"
-p256 = { version = "0.14", default-features = false, features = ["ecdh", "arithmetic", "std"] }
-aes = "0.9"
-cbc = { version = "0.2", features = ["alloc"] }
-hkdf = "0.13"
-hmac = "0.13"
-getrandom = "0.4"
-zeroize = "1.9"
-# Exact pin: must match the Verus release in tools/verus.toml.
-vstd = "=0.0.0-2026-09-20-0158"
+passkey-tpm-wire.workspace = true
+sha2.workspace = true
+p256 = { workspace = true, features = ["ecdh", "arithmetic", "std"] }
+aes.workspace = true
+cbc = { workspace = true, features = ["alloc"] }
+hkdf.workspace = true
+hmac.workspace = true
+getrandom.workspace = true
+zeroize.workspace = true
+vstd.workspace = true
 
 [dev-dependencies]
-proptest = { version = "1.11", default-features = false, features = ["std"] }
+proptest = { workspace = true, features = ["std"] }
 
 [package.metadata.verus]
 verify = true
