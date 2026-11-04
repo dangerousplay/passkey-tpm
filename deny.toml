@@ -7,7 +7,14 @@ all-features = true
 version = 2
 yanked = "deny"
 # Every ignored advisory needs a reason and a tracking issue.
-ignore = []
+ignore = [
+    # zvariant, zbus_names and zvariant_derive were merged into zbus 6 and are unmaintained
+    # on their own (no vulnerability). ksni 0.3 and notify-rust 4.18, the latest releases,
+    # still need zbus 5, so the tree can't move yet. Tracking: TODO(zbus-6) issue.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained; ksni/notify-rust still on zbus 5" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained; ksni/notify-rust still on zbus 5" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained; ksni/notify-rust still on zbus 5" },
+]
 
 [licenses]
 version = 2
