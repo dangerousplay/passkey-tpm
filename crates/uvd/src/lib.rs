@@ -26,7 +26,7 @@ use tokio_util::sync::CancellationToken;
 use zbus::message::Header;
 use zbus::names::BusName;
 use zbus::object_server::SignalEmitter;
-use zbus::zvariant::ObjectPath;
+use zbus::ObjectPath;
 use zbus::{fdo, interface, Connection};
 
 pub use passkey_tpm_uv::seat::{Logind, SessionPolicy};

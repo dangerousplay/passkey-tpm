@@ -7,14 +7,7 @@ all-features = true
 version = 2
 yanked = "deny"
 # Every ignored advisory needs a reason and a tracking issue.
-ignore = [
-    # zvariant, zbus_names and zvariant_derive were merged into zbus 6 and are unmaintained
-    # on their own (no vulnerability). ksni 0.3 and notify-rust 4.18, the latest releases,
-    # still need zbus 5, so the tree can't move yet. Tracking: TODO(zbus-6) issue.
-    { id = "RUSTSEC-2026-0370", reason = "zvariant unmaintained; ksni/notify-rust still on zbus 5" },
-    { id = "RUSTSEC-2026-0371", reason = "zbus_names unmaintained; ksni/notify-rust still on zbus 5" },
-    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive unmaintained; ksni/notify-rust still on zbus 5" },
-]
+ignore = []
 
 [licenses]
 version = 2
@@ -33,13 +26,15 @@ allow = [
     "Unicode-3.0",
     "CC0-1.0",
 ]
-# Public-domain dedication; scoped to the crate that needs it (tray icon, AD-021).
-exceptions = [
-    { crate = "ksni", allow = ["Unlicense"] },
-]
 
 [bans]
-multiple-versions = "warn"
+# Every crate in one version; a skip needs a reason.
+multiple-versions = "deny"
+skip = [
+    # syn 2 is still used by tss-esapi 7.7's derives (enumflags2, num-derive) and by vstd,
+    # which is pinned to the Verus release; everything else is on syn 3.
+    { crate = "syn@2", reason = "tss-esapi 7.7 derives and the pinned vstd" },
+]
 wildcards = "deny"
 allow-wildcard-paths = true
 deny = [

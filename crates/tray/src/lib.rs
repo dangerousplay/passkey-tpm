@@ -2,7 +2,8 @@
 //! session, with fingerprint enrollment through fprintd.
 //!
 //! This library holds the pure parts (status model, finger choice, messages, icon) so they
-//! can be unit-tested; [`probe`] talks to D-Bus and the binary wires everything to `ksni`.
+//! can be unit-tested; [`probe`] talks to D-Bus and the binary wires everything to the
+//! `passkey-tpm-desktop` tray icon.
 //!
 //! The tray is informational and runs as the user, like the agent: same-user malware can
 //! spoof it. It holds no secrets; fprintd's polkit action authorises enrollment.

@@ -14,7 +14,7 @@ use std::pin::Pin;
 
 use futures_util::{Stream, StreamExt};
 use zbus::message::Type;
-use zbus::zvariant::OwnedObjectPath;
+use zbus::OwnedObjectPath;
 use zbus::{Connection, MatchRule, MessageStream};
 
 const LOGIND: &str = "org.freedesktop.login1";
@@ -60,8 +60,8 @@ impl Logind {
                 continue;
             }
             let proxy = zbus::fdo::PropertiesProxy::builder(&self.conn)
-                .destination(LOGIND)?
-                .path(path)?
+                .destination(LOGIND)
+                .path(path)
                 .build()
                 .await?;
             let active = proxy.get(SESSION_IFACE.try_into()?, "Active").await?;
@@ -100,17 +100,17 @@ impl SessionPolicy for Logind {
 pub async fn changes(conn: &Connection) -> zbus::Result<impl Stream<Item = ()> + Unpin> {
     let properties = MatchRule::builder()
         .msg_type(Type::Signal)
-        .sender(LOGIND)?
-        .interface("org.freedesktop.DBus.Properties")?
-        .member("PropertiesChanged")?
-        .arg(0, SESSION_IFACE)?
-        .build();
+        .sender(LOGIND)
+        .interface("org.freedesktop.DBus.Properties")
+        .member("PropertiesChanged")
+        .arg(0, SESSION_IFACE)
+        .build()?;
     let manager = MatchRule::builder()
         .msg_type(Type::Signal)
-        .sender(LOGIND)?
-        .path(MANAGER_PATH)?
-        .interface(MANAGER_IFACE)?
-        .build();
+        .sender(LOGIND)
+        .path(MANAGER_PATH)
+        .interface(MANAGER_IFACE)
+        .build()?;
     let properties = MessageStream::for_match_rule(properties, conn, None).await?;
     let manager = MessageStream::for_match_rule(manager, conn, None).await?;
     Ok(futures_util::stream::select(properties, manager).map(|_| ()))

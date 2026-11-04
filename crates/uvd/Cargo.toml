@@ -10,7 +10,7 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-zbus = { workspace = true, features = ["tokio"] }
+zbus = { workspace = true, features = ["service"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
 tokio-util.workspace = true
 nix = { workspace = true, features = ["user"] }

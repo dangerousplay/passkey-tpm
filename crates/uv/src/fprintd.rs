@@ -20,7 +20,7 @@ use futures_util::StreamExt;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use zbus::message::Type as MessageType;
-use zbus::zvariant::OwnedObjectPath;
+use zbus::OwnedObjectPath;
 use zbus::{Connection, MatchRule, Message, MessageStream};
 
 /// Well-known bus name of fprintd.
@@ -133,7 +133,7 @@ async fn call_device<B>(
     body: &B,
 ) -> zbus::Result<Message>
 where
-    B: serde::Serialize + zbus::zvariant::DynamicType,
+    B: serde::Serialize + zbus::DynamicType,
 {
     conn.call_method(
         Some(owner),
@@ -462,7 +462,7 @@ async fn enroll_stages(conn: &Connection, owner: &str, device: &OwnedObjectPath)
         )
         .await
         .ok()?;
-    let value: zbus::zvariant::OwnedValue = reply.body().deserialize().ok()?;
+    let value: zbus::OwnedVariant = reply.body().deserialize().ok()?;
     i32::try_from(value)
         .ok()
         .and_then(|n| u32::try_from(n).ok())
@@ -477,11 +477,11 @@ async fn subscribe(
 ) -> zbus::Result<MessageStream> {
     let rule = MatchRule::builder()
         .msg_type(MessageType::Signal)
-        .sender(owner)?
-        .path(device.as_str())?
-        .interface(DEVICE_IFACE)?
-        .member(member)?
-        .build();
+        .sender(owner)
+        .path(device.as_str())
+        .interface(DEVICE_IFACE)
+        .member(member)
+        .build()?;
     MessageStream::for_match_rule(rule, conn, None).await
 }
 
@@ -548,7 +548,7 @@ pub async fn device_description(conn: &Connection) -> Result<String, String> {
             )
             .await
             .map_err(|e| format!("Get {property}: {e}"))?;
-        let value: zbus::zvariant::OwnedValue = reply
+        let value: zbus::OwnedVariant = reply
             .body()
             .deserialize()
             .map_err(|e| format!("{property} reply: {e}"))?;
@@ -650,9 +650,9 @@ mod tests {
     }
 
     fn signal(sender: Option<&str>, path: &str, iface: &str, member: &str) -> Message {
-        let mut b = Message::signal(path, iface, member).unwrap();
+        let mut b = Message::signal(path, iface, member);
         if let Some(s) = sender {
-            b = b.sender(s).unwrap();
+            b = b.sender(s);
         }
         b.build(&("verify-match", true)).unwrap()
     }

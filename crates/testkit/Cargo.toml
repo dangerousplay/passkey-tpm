@@ -9,7 +9,7 @@ publish = false
 
 [dependencies]
 tss-esapi.workspace = true
-zbus = { workspace = true, features = ["tokio"] }
+zbus.workspace = true
 
 [lints]
 workspace = true

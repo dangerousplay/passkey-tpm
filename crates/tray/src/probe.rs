@@ -5,8 +5,8 @@ use std::future::Future;
 use std::time::Duration;
 
 use passkey_tpm_uv::fprintd;
-use zbus::zvariant::{OwnedObjectPath, OwnedValue};
 use zbus::Connection;
+use zbus::{OwnedObjectPath, OwnedVariant};
 
 use crate::{Broker, PinState, Reader, Snapshot, VirtualKey};
 
@@ -72,7 +72,7 @@ async fn unit_property(
         )
         .await
         .map_err(|e| format!("Get {name}: {e}"))?;
-    let value: OwnedValue = reply
+    let value: OwnedVariant = reply
         .body()
         .deserialize()
         .map_err(|e| format!("{name}: {e}"))?;

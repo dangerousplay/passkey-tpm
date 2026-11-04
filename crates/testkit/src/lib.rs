@@ -187,7 +187,6 @@ pub mod bus {
         /// If the connection fails.
         pub async fn connect(&self) -> Connection {
             zbus::connection::Builder::address(self.address.as_str())
-                .unwrap()
                 .build()
                 .await
                 .unwrap()

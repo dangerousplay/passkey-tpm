@@ -2,7 +2,7 @@
 
 use passkey_tpm_testkit::bus::PrivateBus;
 use passkey_tpm_uvd::{Logind, SessionPolicy};
-use zbus::zvariant::OwnedObjectPath;
+use zbus::OwnedObjectPath;
 use zbus::{interface, Connection};
 
 struct Manager {

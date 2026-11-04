@@ -10,11 +10,10 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-ksni = { workspace = true, features = ["tokio"] }
-zbus = { workspace = true, features = ["tokio"] }
+zbus.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "signal", "process"] }
 tokio-util.workspace = true
-notify-rust = { workspace = true, features = ["z"] }
+passkey-tpm-desktop.workspace = true
 passkey-tpm-uv.workspace = true
 passkey-tpm-core.workspace = true
 passkey-tpm-wire.workspace = true

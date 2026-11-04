@@ -10,11 +10,11 @@
 #![allow(clippy::print_stderr)]
 
 use std::process::ExitCode;
-use std::sync::mpsc as std_mpsc;
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use passkey_tpm_agent::{Effect, Hid};
+use passkey_tpm_desktop::notify::{Answer, Notification, Notifier};
 use passkey_tpm_transport_uhid::{
     fido_device_params, DeviceParams, UhidDevice, UhidEvent, UhidWriter,
 };
@@ -68,7 +68,7 @@ async fn cancel(bus: &Connection) -> zbus::Result<()> {
         .map(|_| ())
 }
 
-/// A notification for the notification thread.
+/// A notification for the notification task.
 enum Note {
     /// "Touch the fingerprint reader" for this relying party.
     Fingerprint(String),
@@ -81,73 +81,85 @@ enum Note {
 /// Whether this user has a fingerprint to touch. Without one (no reader, fprintd missing,
 /// nothing enrolled) the broker asks for presence instead, so "touch the reader" would only
 /// be a stale banner in front of that question.
-fn has_fingerprint(bus: &Connection, runtime: &tokio::runtime::Handle) -> bool {
-    runtime.block_on(async {
-        tokio::time::timeout(
-            FPRINTD_TIMEOUT,
-            passkey_tpm_uv::fprintd::has_enrolled(bus, ""),
-        )
-        .await
-        .is_ok_and(|r| r.unwrap_or(false))
-    })
+async fn has_fingerprint(bus: &Connection) -> bool {
+    tokio::time::timeout(
+        FPRINTD_TIMEOUT,
+        passkey_tpm_uv::fprintd::has_enrolled(bus, ""),
+    )
+    .await
+    .is_ok_and(|r| r.unwrap_or(false))
 }
 
-/// Shows notifications in order on one thread, so a presence question replaces the
+fn note(summary: &str, body: &str) -> Notification {
+    Notification::new("passkey-tpm", summary, body)
+        .icon("fingerprint")
+        .timeout_ms(30_000)
+}
+
+/// Shows notifications in order on one task, so a presence question replaces the
 /// fingerprint prompt shown just before it for the same request. Presence answers are sent
-/// to the broker through `bus` on `runtime`.
+/// to the broker through `bus`.
 ///
 /// Informational only: the agent runs in the user's session and can be spoofed by
 /// same-user malware (docs/threat-model.md, "prompt spoofing").
-fn notifier(bus: Connection, runtime: tokio::runtime::Handle) -> std_mpsc::Sender<Note> {
-    let (tx, rx) = std_mpsc::channel::<Note>();
-    std::thread::spawn(move || {
-        let mut last: Option<notify_rust::NotificationHandle> = None;
-        for note in rx {
-            let mut n = notify_rust::Notification::new();
-            n.appname("passkey-tpm")
-                .icon("fingerprint")
-                .timeout(notify_rust::Timeout::Milliseconds(30_000));
-            match note {
+fn notifier(bus: Connection) -> mpsc::UnboundedSender<Note> {
+    let (tx, mut rx) = mpsc::unbounded_channel::<Note>();
+    tokio::spawn(async move {
+        let session = match Connection::session().await {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("cannot connect to the session bus, no notifications: {e}");
+                return;
+            }
+        };
+        let notifier = match Notifier::new(&session).await {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("cannot reach the notification server: {e}");
+                return;
+            }
+        };
+        let mut last: Option<u32> = None;
+        while let Some(next) = rx.recv().await {
+            match next {
                 Note::Fingerprint(rp) => {
-                    if !has_fingerprint(&bus, &runtime) {
+                    if !has_fingerprint(&bus).await {
                         continue;
                     }
-                    n.summary("Touch the fingerprint reader")
-                        .body(&format!("to continue with {rp}"));
-                    last = n.show().ok();
+                    let n = note(
+                        "Touch the fingerprint reader",
+                        &format!("to continue with {rp}"),
+                    );
+                    last = notifier.show(&n).await.ok();
                 }
                 Note::Close => {
-                    if let Some(handle) = last.take() {
-                        handle.close();
+                    if let Some(id) = last.take() {
+                        let _ = notifier.close(id).await;
                     }
                 }
                 Note::Presence { id, rp } => {
-                    n.summary("Allow passkey-tpm?")
-                        .body(&format!("{rp} wants to use your passkey."))
-                        .action("allow", "Allow")
-                        .action("deny", "Deny");
-                    if let Some(previous) = last.take() {
-                        n.id(previous.id());
-                    }
-                    let handle = match n.show() {
-                        Ok(h) => h,
+                    let n = note(
+                        "Allow passkey-tpm?",
+                        &format!("{rp} wants to use your passkey."),
+                    )
+                    .action("allow", "Allow")
+                    .action("deny", "Deny")
+                    .replaces(last.take());
+                    let answer = match notifier.ask(&n).await {
+                        Ok((_, answer)) => answer,
                         Err(e) => {
                             eprintln!("cannot show the presence notification: {e}");
                             continue;
                         }
                     };
                     let bus = bus.clone();
-                    let runtime = runtime.clone();
-                    // Wait on its own thread so later prompts aren't held up.
-                    std::thread::spawn(move || {
-                        handle.wait_for_action(|action| {
-                            let allow = action == "allow";
-                            runtime.spawn(async move {
-                                if let Err(e) = confirm_presence(&bus, id, allow).await {
-                                    eprintln!("ConfirmPresence failed: {e}");
-                                }
-                            });
-                        });
+                    // Wait on its own task so later prompts aren't held up. Anything but
+                    // the Allow button (Deny, a click on the text, dismissing) denies.
+                    tokio::spawn(async move {
+                        let allow = answer.await == Answer::Action("allow".into());
+                        if let Err(e) = confirm_presence(&bus, id, allow).await {
+                            eprintln!("ConfirmPresence failed: {e}");
+                        }
                     });
                 }
             }
@@ -170,14 +182,14 @@ async fn confirm_presence(bus: &Connection, id: u64, allow: bool) -> zbus::Resul
 
 /// Forwards the broker's `PresenceRequested` signals to the notifier. Only signals from the
 /// current owner of the broker's name count, so another client can't make the agent ask.
-fn watch_presence(bus: Connection, notes: std_mpsc::Sender<Note>) {
+fn watch_presence(bus: Connection, notes: mpsc::UnboundedSender<Note>) {
     tokio::spawn(async move {
         let rule = MatchRule::builder()
             .msg_type(MessageType::Signal)
             .path(OBJECT_PATH)
-            .and_then(|b| b.interface(BUS_NAME))
-            .and_then(|b| b.member("PresenceRequested"))
-            .map(|b| b.build());
+            .interface(BUS_NAME)
+            .member("PresenceRequested")
+            .build();
         let stream = match rule {
             Ok(rule) => MessageStream::for_match_rule(rule, &bus, None).await,
             Err(e) => Err(e),
@@ -298,7 +310,7 @@ fn apply(
     writer: Option<&UhidWriter>,
     bus: &Connection,
     tx: &mpsc::UnboundedSender<Input>,
-    notes: &std_mpsc::Sender<Note>,
+    notes: &mpsc::UnboundedSender<Note>,
 ) {
     for effect in effects {
         match effect {
@@ -365,7 +377,7 @@ async fn main() -> ExitCode {
     let params = device_params(uid);
     let (tx, mut rx) = mpsc::unbounded_channel();
     watch_seat(bus.clone(), uid, tx.clone());
-    let notes = notifier(bus.clone(), tokio::runtime::Handle::current());
+    let notes = notifier(bus.clone());
     watch_presence(bus.clone(), notes.clone());
 
     // `/dev/uhid` stays open for the agent's lifetime once opened; `present` tracks whether

@@ -82,7 +82,6 @@ impl PrivateBus {
 
     async fn connect(&self) -> Connection {
         zbus::connection::Builder::address(self.address.as_str())
-            .unwrap()
             .build()
             .await
             .unwrap()
@@ -288,7 +287,6 @@ async fn device_busy_is_unavailable() {
     let f = fixture(MockFprintd::default()).await;
     // Another client holds the claim.
     let other = zbus::connection::Builder::address(f.bus_address.as_str())
-        .unwrap()
         .build()
         .await
         .unwrap();
@@ -347,7 +345,6 @@ async fn spoof_when_verifying(f: &Fixture, spoofer: Connection) -> tokio::task::
 async fn spoofed_match_from_non_owner_is_ignored_until_timeout() {
     let f = fixture(MockFprintd::with_results(&[], ms(10))).await;
     let spoofer = zbus::connection::Builder::address(f.bus_address.as_str())
-        .unwrap()
         .build()
         .await
         .unwrap();
@@ -365,7 +362,6 @@ async fn spoofed_match_does_not_override_real_no_match() {
     ))
     .await;
     let spoofer = zbus::connection::Builder::address(f.bus_address.as_str())
-        .unwrap()
         .build()
         .await
         .unwrap();
@@ -566,7 +562,6 @@ async fn enroll_denied_by_polkit_is_not_authorized() {
 async fn enroll_on_claimed_device_is_busy() {
     let f = fixture(MockFprintd::default()).await;
     let other = zbus::connection::Builder::address(f.bus_address.as_str())
-        .unwrap()
         .build()
         .await
         .unwrap();
@@ -613,7 +608,6 @@ async fn enroll_cancel_and_timeout_clean_up() {
 async fn spoofed_enroll_completed_is_ignored() {
     let f = fixture(enroll_script(&[], ms(10))).await;
     let spoofer = zbus::connection::Builder::address(f.bus_address.as_str())
-        .unwrap()
         .build()
         .await
         .unwrap();

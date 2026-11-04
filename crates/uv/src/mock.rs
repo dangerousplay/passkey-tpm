@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
 use zbus::object_server::SignalEmitter;
-use zbus::zvariant::OwnedObjectPath;
+use zbus::OwnedObjectPath;
 use zbus::{interface, Connection};
 
 pub use crate::fprintd::{MANAGER_PATH, SERVICE};
