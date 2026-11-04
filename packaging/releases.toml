@@ -1,0 +1,24 @@
+# Release history, newest first. The package version itself lives in Cargo.toml
+# ([workspace.package] version); `cargo xtask version <new> --summary "..."` bumps it and
+# adds an entry here, then renders packaging/templates/ (Debian and Fedora changelogs, Arch
+# recipe). `cargo xtask version --check` fails when a rendered file is out of date.
+
+[[release]]
+version = "0.1.0-beta.3"
+date = "2026-11-04"
+summary = "Third beta: Firefox sign-in with a username, PIN-only prompts (#5)"
+
+[[release]]
+version = "0.1.0-beta.2"
+date = "2026-10-13"
+summary = "Second beta: tray icon, PIN + presence for users without a fingerprint"
+
+[[release]]
+version = "0.1.0-beta.1"
+date = "2026-10-04"
+summary = "First beta"
+
+[[release]]
+version = "0.1.0"
+date = "2026-10-03"
+summary = "Initial package"

@@ -5,6 +5,7 @@ use crate::runner::{Error, Result};
 /// The fast pipeline run on every change: lints, unit/integration tests and Verus.
 pub const STEPS: &[(&str, &[&str])] = &[
     ("fmt", &["--check"]),
+    ("version", &["--check"]),
     ("clippy", &[]),
     ("deny", &[]),
     ("test", &[]),
@@ -54,7 +55,15 @@ mod tests {
         let names: Vec<&str> = STEPS.iter().map(|(n, _)| *n).collect();
         assert_eq!(
             names,
-            ["fmt", "clippy", "deny", "test", "verus", "portability"]
+            [
+                "fmt",
+                "version",
+                "clippy",
+                "deny",
+                "test",
+                "verus",
+                "portability"
+            ]
         );
         let slow: Vec<&str> = SLOW_STEPS.iter().map(|(n, _)| *n).collect();
         assert_eq!(slow, ["kani", "fuzz"]);

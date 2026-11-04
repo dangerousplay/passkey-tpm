@@ -12,6 +12,7 @@ mod kani;
 mod portability;
 mod release;
 mod test;
+mod version;
 mod verus;
 mod vm;
 
@@ -93,6 +94,11 @@ pub const TASKS: &[Task] = &[
         name: "release",
         about: "GoReleaser: build .deb/.rpm/Arch packages locally (snapshot); --publish to release",
         run: release::release,
+    },
+    Task {
+        name: "version",
+        about: "print the version; <new> --summary TEXT [--date D] bumps it; --render, --check",
+        run: version::run,
     },
     Task {
         name: "build",
