@@ -24,7 +24,7 @@
 - Developer workflow: `cargo xtask` is the single entry point for local work and CI (fmt, clippy, test, deny, verus, kani, fuzz, dist). CI calls only `cargo xtask <task>`, so local and CI behaviour match
 - Lint/supply chain: `clippy` (workspace lints in `Cargo.toml`, `-D warnings`, pedantic subset, `unwrap_used`/`panic`/`indexing_slicing` denied in `core`), `cargo-deny` (licenses allowlist, RustSec advisories, bans on duplicate/unmaintained crates such as `serde_cbor`, allowed sources = crates.io only)
 
-**Key dependencies:** `tss-esapi` (tpm2-tss), `zbus` (fprintd, credentialsd, logind, polkit), `ctap-types` or `passkey-types` for message types, `coset` (COSE), `ciborium` (CBOR), RustCrypto `p256`/`ecdsa`, `zeroize`/`secrecy`, `ksni`, `notify-rust`, `sd-notify`.
+**Key dependencies:** `tss-esapi` (tpm2-tss), `zbus` (fprintd, credentialsd, logind, polkit), `ctap-types` or `passkey-types` for message types, `coset` (COSE), `ciborium` (CBOR), RustCrypto `p256`/`ecdsa`, `zeroize`/`secrecy`, `sd-notify`; desktop notifications and the tray icon are in-house on zbus (AD-023).
 
 ## Scope
 
