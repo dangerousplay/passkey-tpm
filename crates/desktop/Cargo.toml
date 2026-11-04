@@ -1,0 +1,23 @@
+[package]
+name = "passkey-tpm-desktop"
+description = "Desktop notifications and StatusNotifierItem tray icon for passkey-tpm, on zbus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+zbus = { workspace = true, features = ["service"] }
+tokio = { workspace = true, features = ["sync", "rt", "macros"] }
+futures-util.workspace = true
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+passkey-tpm-testkit.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+
+[lints]
+workspace = true

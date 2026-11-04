@@ -1,16 +1,17 @@
 //! `passkey-tpm-tray`: StatusNotifierItem with passkey-tpm status and fingerprint enrollment.
 //!
 //! Menu callbacks only send a [`Command`]; the loop in [`main`] runs probes and enrollment
-//! as tasks and pushes state back through the `ksni` handle.
+//! as tasks and pushes state back through the tray [`Handle`].
 #![allow(clippy::print_stderr)]
 
 use std::process::ExitCode;
-use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use ksni::menu::StandardItem;
-use ksni::{Category, Icon, MenuItem, Status, ToolTip, TrayMethods};
+use passkey_tpm_desktop::notify::{Notification, Notifier};
+use passkey_tpm_desktop::tray::{
+    self, Category, Handle, Icon, MenuItem, StandardItem, Status, ToolTip,
+};
 use passkey_tpm_tray::{
     dialog, finger_label, fingerprint_pixmap, health_colour, pin, probe, EnrollTracker, Health,
     Message, PinAction, PinState, Snapshot,
@@ -29,7 +30,7 @@ const QUIT_GRACE: Duration = Duration::from_secs(3);
 /// Pixmap sizes offered to the tray host.
 const ICON_SIZES: [u32; 4] = [16, 22, 32, 48];
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Command {
     Refresh,
     Enroll(&'static str),
@@ -70,16 +71,13 @@ impl TrayApp {
     }
 }
 
-fn info_item(label: String) -> MenuItem<TrayApp> {
-    StandardItem {
-        label,
-        enabled: false,
-        ..Default::default()
-    }
-    .into()
+fn info_item(label: String) -> MenuItem<Command> {
+    StandardItem::info(label).into()
 }
 
-impl ksni::Tray for TrayApp {
+impl tray::Tray for TrayApp {
+    type Action = Command;
+
     fn id(&self) -> String {
         "passkey-tpm".into()
     }
@@ -103,10 +101,6 @@ impl ksni::Tray for TrayApp {
         self.icons()
     }
 
-    fn attention_icon_pixmap(&self) -> Vec<Icon> {
-        self.icons()
-    }
-
     fn tool_tip(&self) -> ToolTip {
         let description = match (self.enrolling, self.snapshot.health()) {
             (Some(finger), _) => format!("Enrolling your {}", finger_label(finger)),
@@ -117,15 +111,18 @@ impl ksni::Tray for TrayApp {
         ToolTip {
             title: "passkey-tpm".into(),
             description,
-            ..Default::default()
         }
     }
 
-    fn activate(&mut self, _x: i32, _y: i32) {
+    fn activate(&mut self) {
         self.send(Command::Refresh);
     }
 
-    fn menu(&self) -> Vec<MenuItem<Self>> {
+    fn on_action(&mut self, command: Command) {
+        self.send(command);
+    }
+
+    fn menu(&self) -> Vec<MenuItem<Command>> {
         let mut items = vec![
             info_item(self.snapshot.reader_line()),
             info_item(self.snapshot.broker_line()),
@@ -135,21 +132,19 @@ impl ksni::Tray for TrayApp {
         ];
         match (self.enrolling, self.snapshot.enroll_target()) {
             (Some(finger), _) => items.push(
-                StandardItem {
-                    label: format!("Cancel enrollment ({})", finger_label(finger)),
-                    icon_name: "process-stop".into(),
-                    activate: Box::new(|t: &mut Self| t.send(Command::CancelEnroll)),
-                    ..Default::default()
-                }
+                StandardItem::new(
+                    format!("Cancel enrollment ({})", finger_label(finger)),
+                    "process-stop",
+                    Command::CancelEnroll,
+                )
                 .into(),
             ),
             (None, Some(Some(finger))) => items.push(
-                StandardItem {
-                    label: "Enroll new fingerprint".into(),
-                    icon_name: "list-add".into(),
-                    activate: Box::new(move |t: &mut Self| t.send(Command::Enroll(finger))),
-                    ..Default::default()
-                }
+                StandardItem::new(
+                    "Enroll new fingerprint",
+                    "list-add",
+                    Command::Enroll(finger),
+                )
                 .into(),
             ),
             (None, Some(None)) => items.push(info_item("All fingers enrolled".into())),
@@ -160,31 +155,11 @@ impl ksni::Tray for TrayApp {
                 PinAction::Set => "Set PIN…",
                 PinAction::Change => "Change PIN…",
             };
-            items.push(
-                StandardItem {
-                    label: label.into(),
-                    icon_name: "dialog-password".into(),
-                    activate: Box::new(move |t: &mut Self| t.send(Command::Pin(action))),
-                    ..Default::default()
-                }
-                .into(),
-            );
+            items.push(StandardItem::new(label, "dialog-password", Command::Pin(action)).into());
         }
         items.extend([
-            StandardItem {
-                label: "Refresh".into(),
-                icon_name: "view-refresh".into(),
-                activate: Box::new(|t: &mut Self| t.send(Command::Refresh)),
-                ..Default::default()
-            }
-            .into(),
-            StandardItem {
-                label: "Quit".into(),
-                icon_name: "application-exit".into(),
-                activate: Box::new(|t: &mut Self| t.send(Command::Quit)),
-                ..Default::default()
-            }
-            .into(),
+            StandardItem::new("Refresh", "view-refresh", Command::Refresh).into(),
+            StandardItem::new("Quit", "application-exit", Command::Quit).into(),
         ]);
         items
     }
@@ -198,24 +173,26 @@ struct Note {
     replace: bool,
 }
 
-/// Shows notifications in order on one blocking thread.
-fn notifier() -> std_mpsc::Sender<Note> {
-    let (tx, rx) = std_mpsc::channel::<Note>();
-    std::thread::spawn(move || {
-        let mut last = None;
-        for note in rx {
-            let (summary, body) = note.message;
-            let mut n = notify_rust::Notification::new();
-            n.appname("passkey-tpm")
-                .summary(&summary)
-                .body(&body)
-                .icon("fingerprint")
-                .timeout(notify_rust::Timeout::Milliseconds(10_000));
-            if let (true, Some(id)) = (note.replace, last) {
-                n.id(id);
+/// Shows notifications in order on one task.
+fn notifier(session: Connection) -> mpsc::UnboundedSender<Note> {
+    let (tx, mut rx) = mpsc::unbounded_channel::<Note>();
+    tokio::spawn(async move {
+        let notifier = match Notifier::new(&session).await {
+            Ok(n) => n,
+            Err(e) => {
+                eprintln!("cannot reach the notification server: {e}");
+                return;
             }
-            match n.show() {
-                Ok(handle) => last = Some(handle.id()),
+        };
+        let mut last = None;
+        while let Some(note) = rx.recv().await {
+            let (summary, body) = note.message;
+            let n = Notification::new("passkey-tpm", &summary, &body)
+                .icon("fingerprint")
+                .timeout_ms(10_000)
+                .replaces(last.filter(|_| note.replace));
+            match notifier.show(&n).await {
+                Ok(id) => last = Some(id),
                 Err(e) => eprintln!("cannot show notification: {e}"),
             }
         }
@@ -228,7 +205,7 @@ fn notifier() -> std_mpsc::Sender<Note> {
 fn spawn_refresh(
     system: Option<Connection>,
     session: Option<Connection>,
-    handle: ksni::Handle<TrayApp>,
+    handle: Handle<TrayApp>,
     busy: Arc<tokio::sync::Mutex<()>>,
     full: bool,
 ) {
@@ -246,9 +223,7 @@ fn spawn_refresh(
         let known_pin = if full {
             None
         } else {
-            handle
-                .update(|t| t.snapshot.pin.clone())
-                .await
+            Some(handle.update(|t| t.snapshot.pin.clone()).await)
                 .filter(|p| matches!(p, PinState::Set | PinState::NotSet))
         };
         let snapshot = probe::snapshot(system.as_ref(), session.as_ref(), known_pin).await;
@@ -260,7 +235,7 @@ fn spawn_refresh(
 fn spawn_pin(
     system: Connection,
     action: PinAction,
-    notes: std_mpsc::Sender<Note>,
+    notes: mpsc::UnboundedSender<Note>,
     tx: mpsc::UnboundedSender<Command>,
 ) {
     tokio::spawn(async move {
@@ -323,7 +298,7 @@ fn spawn_enroll(
     system: Connection,
     finger: &'static str,
     cancel: CancellationToken,
-    notes: std_mpsc::Sender<Note>,
+    notes: mpsc::UnboundedSender<Note>,
     tx: mpsc::UnboundedSender<Command>,
 ) {
     tokio::spawn(async move {
@@ -355,10 +330,10 @@ async fn main() -> ExitCode {
         }
     };
     let session = match Connection::session().await {
-        Ok(c) => Some(c),
+        Ok(c) => c,
         Err(e) => {
             eprintln!("cannot connect to the session bus: {e}");
-            None
+            return ExitCode::FAILURE;
         }
     };
 
@@ -368,8 +343,8 @@ async fn main() -> ExitCode {
         enrolling: None,
         tx: tx.clone(),
     };
-    // Autostart can run before the panel: wait for a StatusNotifierWatcher instead of exiting.
-    let handle = match app.assume_sni_available(true).spawn().await {
+    // Autostart can run before the panel: the item registers whenever a watcher appears.
+    let handle = match tray::spawn(&session, app).await {
         Ok(h) => h,
         Err(e) => {
             eprintln!("cannot register the tray icon: {e}");
@@ -377,12 +352,12 @@ async fn main() -> ExitCode {
         }
     };
 
-    let notes = notifier();
+    let notes = notifier(session.clone());
     let busy = Arc::new(tokio::sync::Mutex::new(()));
     let refresh = |full: bool| {
         spawn_refresh(
             system.clone(),
-            session.clone(),
+            Some(session.clone()),
             handle.clone(),
             busy.clone(),
             full,

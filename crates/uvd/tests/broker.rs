@@ -468,10 +468,9 @@ async fn presence_signals(conn: &Connection) -> zbus::MessageStream {
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
         .interface(BUS_NAME)
-        .unwrap()
         .member("PresenceRequested")
-        .unwrap()
-        .build();
+        .build()
+        .unwrap();
     zbus::MessageStream::for_match_rule(rule, conn, None)
         .await
         .unwrap()
@@ -499,7 +498,7 @@ fn answer_presence(f: &Fixture, other: Connection, allow: bool) -> tokio::task::
         let (id, prompt): (u64, String) = msg.body().deserialize().unwrap();
         let err = confirm(&other, id, true).await.unwrap_err();
         assert!(
-            matches!(&err, zbus::Error::MethodError(name, _, _) if name.as_str() == "org.freedesktop.DBus.Error.AccessDenied"),
+            matches!(&err, zbus::Error::FDO(e) if matches!(**e, zbus::fdo::Error::AccessDenied(_))),
             "{err}"
         );
         confirm(&client, id, allow).await.unwrap();

@@ -20,7 +20,6 @@ async fn main() {
     let starter = std::env::var("DBUS_STARTER_ADDRESS").ok();
     let conn = match &starter {
         Some(address) => zbus::connection::Builder::address(address.as_str())
-            .expect("starter address")
             .build()
             .await
             .expect("bus"),
