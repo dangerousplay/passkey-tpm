@@ -144,6 +144,13 @@
 **Trade-off:** no use from seatless sessions (SSH); requires logind.
 **Impact:** `passkey_tpm_uv::seat`; `Broker::new` takes a `SessionPolicy`; VM scenarios log users in on VTs and switch with `chvt`.
 
+### AD-023: zbus 6 everywhere; own Notifications and StatusNotifierItem code (2026-11-04)
+
+**Decision:** All crates use zbus 6, declared once in `[workspace.dependencies]` like every other dependency. `notify-rust` and `ksni` are replaced by `passkey-tpm-desktop`: a Notifications client (`notify`) and a StatusNotifierItem + flat `com.canonical.dbusmenu` server (`tray`), both on zbus 6. `deny.toml` has no ignored advisories, no license exceptions, and denies duplicate crate versions (one reasoned skip: `syn` 2, used by tss-esapi 7.7's derives and the pinned vstd).
+**Reason:** zvariant, zbus_names and zvariant_derive became unmaintained when they were merged into zbus 6 (RUSTSEC-2026-0370/0371/0372). The latest ksni (0.3.7) and notify-rust (4.18.2) still require zbus 5, and their zbus 6 ports are unmerged pull requests.
+**Trade-off:** About 950 lines of D-Bus UI code to maintain (integration-tested against mock servers on a private bus) instead of two dependencies; the menu is flat (no submenus, checkmarks or shortcuts), which is all the tray uses.
+**Impact:** Supersedes AD-021's "built on ksni" and its Unlicense exception. The agent's notifications run on a tokio task with the session bus; presence answers are unchanged (only the Allow button allows).
+
 ### AD-022: Users without a fingerprint use PIN + presence confirmation (2026-10-13)
 
 **Decision:** For users with no enrolled fingerprint (no reader, fprintd unavailable or zero fingers), a request whose UV already came from a verified PIN token — and touch-to-select, selection and reset — asks for presence instead of failing: the core returns `Step::NeedPresence`, the broker sends a unicast `PresenceRequested(id, prompt)` signal to the `Ctap` caller and accepts `ConfirmPresence(id, allow)` only from that same connection; the agent answers with an Allow/Deny notification. Presence never replaces a fingerprint the core asked for, and signatures still go through the UV gate. The tray can set/change the PIN (zenity/kdialog + clientPIN protocol 2 over `Ctap`). Spec: `.specs/features/pin-without-fingerprint/`.
