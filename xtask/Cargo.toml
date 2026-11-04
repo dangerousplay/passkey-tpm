@@ -8,8 +8,8 @@ publish = false
 
 [dependencies]
 # Packaging templates (`cargo xtask version`).
-minijinja = { version = "3", default-features = false, features = ["builtins", "std_collections"] }
-toml = { version = "1", default-features = false, features = ["parse", "display", "serde", "std"] }
+minijinja = { workspace = true, features = ["builtins", "std_collections"] }
+toml = { workspace = true, features = ["parse", "display", "serde", "std"] }
 
 [lints]
 workspace = true

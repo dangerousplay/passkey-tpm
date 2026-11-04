@@ -12,6 +12,42 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/dangerousplay/passkey-tpm"
 authors = ["Davi Henrique"]
 
+[workspace.dependencies]
+# Every dependency is declared once here; members use `<name>.workspace = true` and add only
+# their own features. `default-features = false` here applies to every member.
+# Internal crates.
+passkey-tpm-core = { path = "crates/core" }
+passkey-tpm-testkit = { path = "crates/testkit" }
+passkey-tpm-tpm = { path = "crates/tpm" }
+passkey-tpm-transport-uhid = { path = "crates/transport-uhid" }
+passkey-tpm-uv = { path = "crates/uv" }
+passkey-tpm-uvd = { path = "crates/uvd" }
+passkey-tpm-wire = { path = "crates/wire" }
+# External crates.
+aes = "0.9"
+argon2 = { version = "0.6", default-features = false }
+cbc = "0.2"
+futures-util = { version = "0.3", default-features = false }
+getrandom = "0.4"
+hkdf = "0.13"
+hmac = "0.13"
+ksni = { version = "0.3", default-features = false }
+minijinja = { version = "3", default-features = false }
+nix = { version = "0.31", default-features = false }
+notify-rust = { version = "4.18", default-features = false }
+p256 = { version = "0.14", default-features = false }
+proptest = { version = "1.12", default-features = false }
+serde = { version = "1", default-features = false }
+sha2 = "0.11"
+tokio = "1.54"
+tokio-util = "0.7"
+toml = { version = "1", default-features = false }
+tss-esapi = "7.7"
+# Exact pin: must match the Verus release in tools/verus.toml.
+vstd = "=0.0.0-2026-09-20-0158"
+zbus = { version = "5.19", default-features = false }
+zeroize = "1.9"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

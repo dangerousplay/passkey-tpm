@@ -10,15 +10,15 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-zbus = { version = "5.19", default-features = false, features = ["tokio"] }
-tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
-notify-rust = { version = "4.18", default-features = false, features = ["z"] }
-passkey-tpm-core = { path = "../core" }
-passkey-tpm-transport-uhid = { path = "../transport-uhid" }
-passkey-tpm-wire = { path = "../wire" }
-passkey-tpm-uv = { path = "../uv" }
-futures-util = { version = "0.3", default-features = false }
-getrandom = "0.4"
+zbus = { workspace = true, features = ["tokio"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
+notify-rust = { workspace = true, features = ["z"] }
+passkey-tpm-core.workspace = true
+passkey-tpm-transport-uhid.workspace = true
+passkey-tpm-wire.workspace = true
+passkey-tpm-uv.workspace = true
+futures-util.workspace = true
+getrandom.workspace = true
 
 [lints]
 workspace = true

@@ -10,22 +10,22 @@ authors.workspace = true
 publish = false
 
 [dependencies]
-zbus = { version = "5.19", default-features = false, features = ["tokio"] }
-tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
-tokio-util = "0.7"
-nix = { version = "0.31", default-features = false, features = ["user"] }
-passkey-tpm-core = { path = "../core" }
-passkey-tpm-tpm = { path = "../tpm" }
-passkey-tpm-uv = { path = "../uv" }
-tss-esapi = "7.7"
+zbus = { workspace = true, features = ["tokio"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "signal"] }
+tokio-util.workspace = true
+nix = { workspace = true, features = ["user"] }
+passkey-tpm-core.workspace = true
+passkey-tpm-tpm.workspace = true
+passkey-tpm-uv.workspace = true
+tss-esapi.workspace = true
 
 [dev-dependencies]
-passkey-tpm-testkit = { path = "../testkit" }
-passkey-tpm-uv = { path = "../uv", features = ["mock"] }
-passkey-tpm-wire = { path = "../wire" }
-p256 = { version = "0.14", default-features = false, features = ["ecdsa", "std"] }
-sha2 = "0.11"
-futures-util = { version = "0.3", default-features = false }
+passkey-tpm-testkit.workspace = true
+passkey-tpm-uv = { workspace = true, features = ["mock"] }
+passkey-tpm-wire.workspace = true
+p256 = { workspace = true, features = ["ecdsa", "std"] }
+sha2.workspace = true
+futures-util.workspace = true
 
 [lints]
 workspace = true
