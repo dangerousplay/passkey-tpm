@@ -27,6 +27,8 @@ jobs:
         include:
           - step: fmt
             args: --check
+          - step: version # packaging files rendered from packaging/templates/
+            args: --check
           - step: clippy
           - step: deny
           - step: test

@@ -30,6 +30,11 @@ ships the same files:
 | Fedora / COPR | `packaging/fedora/passkey-tpm.spec` | vendored crates for COPR; Source2 = `packaging/sysusers/passkey-tpm.conf` |
 | Debian / Ubuntu PPA | `packaging/debian/` (copy to `debian/`) | cargo build; an archive upload would use debcargo-packaged crates |
 
+The version-bearing files (`arch/PKGBUILD`, `arch/.SRCINFO`, `fedora/passkey-tpm.spec`,
+`debian/changelog`) are generated: edit [`templates/`](templates/) and
+[`releases.toml`](releases.toml), then `cargo xtask version --render`. CI fails on drift
+(`cargo xtask version --check`); `cargo xtask version <new> --summary "..."` bumps the version.
+
 `cargo xtask dist` (no `--destdir`) writes `target/dist/passkey-tpm-<version>.tar.gz`.
 
 ## Upstream binary packages
@@ -49,12 +54,12 @@ the release workflow of a `v*` tag, and GitHub keeps SLSA build provenance for e
 `checksums.txt`. Either check works:
 
 ```sh
-cosign verify-blob --bundle passkey-tpm_0.1.0-beta.1_amd64.deb.sigstore.json \
+cosign verify-blob --bundle passkey-tpm_<version>_amd64.deb.sigstore.json \
   --certificate-identity-regexp '^https://github.com/dangerousplay/passkey-tpm/\.github/workflows/release\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  passkey-tpm_0.1.0-beta.1_amd64.deb
+  passkey-tpm_<version>_amd64.deb
 
-gh attestation verify passkey-tpm_0.1.0-beta.1_amd64.deb --repo dangerousplay/passkey-tpm
+gh attestation verify passkey-tpm_<version>_amd64.deb --repo dangerousplay/passkey-tpm
 ```
 
 Pre-release tags (`v0.1.0-beta.1`) produce versions that sort before the final release in

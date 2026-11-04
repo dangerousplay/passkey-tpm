@@ -1,0 +1,49 @@
+{#- Stub for .github/release-notes/v<version>.md, written by `cargo xtask version <new>` when
+    that file doesn't exist yet. The first line is the title (git-cliff drops it). -#}
+passkey-tpm {{ version }}
+
+{% if prerelease %}> **Pre-release — for testing, not daily use yet.**{% else %}>{% endif %} Please report problems with the [bug report form](https://github.com/dangerousplay/passkey-tpm/issues/new/choose) and include the output of `passkey-tpm info`.
+
+passkey-tpm turns your laptop into a FIDO2 security key: passkeys live in the TPM 2.0 chip and are unlocked with your fingerprint (fprintd) or a PIN. It works with browsers, `fido2-token`, `pam_u2f` and `systemd-cryptenroll` through a virtual USB security key.
+
+### New in this release
+
+<!-- TODO: what changed for users (git-cliff adds the commit list below these notes). -->
+
+### What to test
+
+<!-- TODO -->
+
+### Packages
+
+| File | For |
+|---|---|
+| `passkey-tpm_{{ version }}_amd64.deb` | Ubuntu 24.04+, Debian 13+ |
+| `passkey-tpm_{{ version }}_amd64.rpm` | Fedora and other RPM distributions with `tpm2-tss` |
+| `passkey-tpm_{{ version }}_amd64.pkg.tar.zst` | Arch Linux |
+| `passkey-tpm-{{ version }}.tar.gz` | source tree layout (`cargo xtask dist`) |
+
+Only x86_64 for now. Requirements: TPM 2.0 (`/dev/tpmrm0`), systemd, and fprintd for fingerprint use.
+
+### Verifying the packages
+
+Every package and `checksums.txt` is signed with [Sigstore](https://www.sigstore.dev/) by this repository's release workflow (`*.sigstore.json`), and GitHub keeps build provenance for each file:
+
+```sh
+cosign verify-blob --bundle passkey-tpm_{{ version }}_amd64.deb.sigstore.json \
+  --certificate-identity-regexp '^https://github.com/dangerousplay/passkey-tpm/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  passkey-tpm_{{ version }}_amd64.deb
+
+gh attestation verify passkey-tpm_{{ version }}_amd64.deb --repo dangerousplay/passkey-tpm
+```
+
+### Known issues
+
+- Any user in front of the screen can use `/dev/uhid`, which can create any kind of HID device, not only security keys. A dedicated helper is planned.
+- `authenticatorReset` is accepted at any time, not only within 10 s of the device appearing.
+- Wrong PINs are budgeted per user so one user can't lock the TPM for everyone; a correct PIN does not clear that budget before the TPM's recovery interval.
+- Without a fingerprint, presence is a desktop notification: malware running as you that learned your PIN could click or fake it (especially on X11). A trusted on-screen prompt is planned.
+- The tray and the presence notification were tested with automated tests, not yet on every desktop; please report how they behave on yours.
+- Clicking the *Allow* notification's text (not its button) denies the request.
+- The `.deb` uses Ubuntu 24.04 / Debian 13 library names and glibc 2.39 or newer.

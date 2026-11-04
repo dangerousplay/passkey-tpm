@@ -7,6 +7,9 @@ license.workspace = true
 publish = false
 
 [dependencies]
+# Packaging templates (`cargo xtask version`).
+minijinja = { version = "3", default-features = false, features = ["builtins", "std_collections"] }
+toml = { version = "1", default-features = false, features = ["parse", "display", "serde", "std"] }
 
 [lints]
 workspace = true

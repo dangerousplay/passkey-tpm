@@ -1,0 +1,10 @@
+{% for r in releases %}
+passkey-tpm ({{ r.deb_version }}-1) unstable; urgency=medium
+
+  * {{ r.summary }}.
+
+ -- Davi Henrique <dangerousplay715@gmail.com>  {{ r.deb_date }}
+{% if not loop.last %}
+
+{% endif %}
+{% endfor %}

@@ -42,6 +42,7 @@ Everything runs through `cargo xtask`; CI runs the same steps, one job each.
 | `cargo xtask dist [--destdir DIR]` | install tree / source tarball used by every package |
 | `cargo xtask changelog [--latest] [--output FILE]` | `CHANGELOG.md` with git-cliff |
 | `cargo xtask release [--publish]` | GoReleaser packages (snapshot unless `--publish`) |
+| `cargo xtask version [<new> --summary TEXT] [--render\|--check]` | print or bump the version; render `packaging/templates/` |
 
 Requirements: rustup, `curl`, `unzip`, `sha256sum`, `libtss2-dev`, `pkg-config`; `swtpm` for
 the TPM tests; `mkosi` and `qemu` for `cargo xtask vm`. All external tools are pinned in
@@ -52,7 +53,12 @@ the TPM tests; `mkosi` and `qemu` for `cargo xtask vm`. All external tools are p
 
 Commits follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`,
 `perf:`, `security:`, `docs:`, ...); git-cliff groups them into the changelog and the GitHub
-release notes. To release, push a signed `vX.Y.Z` tag: the `release` workflow runs the gate,
+release notes. To prepare a release, run `cargo xtask version X.Y.Z --summary "..."`: it
+sets the workspace version in `Cargo.toml` (the only place to change it), adds the entry to
+`packaging/releases.toml`, refreshes the lockfiles, renders the distribution recipes from
+`packaging/templates/` and writes a `.github/release-notes/vX.Y.Z.md` stub for the
+hand-written part of the notes. Commit that as `chore(release): X.Y.Z`. To release, push a
+signed `vX.Y.Z` tag: the `release` workflow runs the gate,
 writes the notes and publishes a draft release with `.deb`, `.rpm` and Arch packages. See
 [`packaging/README.md`](packaging/README.md) for distribution recipes.
 
