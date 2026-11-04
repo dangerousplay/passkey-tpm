@@ -1,8 +1,8 @@
-%global upstream_version 0.1.0-beta.2
+%global upstream_version 0.1.0-beta.3
 
 Name:           passkey-tpm
 # "~" sorts the pre-release before the final 0.1.0.
-Version:        0.1.0~beta.2
+Version:        0.1.0~beta.3
 Release:        1%{?dist}
 Summary:        TPM-backed passkeys (FIDO2/WebAuthn) for Linux
 License:        MIT OR Apache-2.0
@@ -71,6 +71,9 @@ cargo run --offline -q -p xtask -- dist --no-build --destdir %{buildroot} --pref
 %{_modulesloaddir}/passkey-tpm.conf
 
 %changelog
+* Wed Nov 04 2026 Davi Henrique <dangerousplay715@gmail.com> - 0.1.0~beta.3-1
+- Third beta: Firefox sign-in with a username, PIN-only prompts (#5)
+
 * Tue Oct 13 2026 Davi Henrique <dangerousplay715@gmail.com> - 0.1.0~beta.2-1
 - Second beta: tray icon, PIN + presence for users without a fingerprint
 
