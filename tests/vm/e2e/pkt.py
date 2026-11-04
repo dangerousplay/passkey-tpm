@@ -60,7 +60,10 @@ def hidraw_nodes(uid: int | None = None) -> set[str]:
     """passkey-tpm hidraw nodes; with `uid`, only that user's agent's (HID_PHYS carries it)."""
     nodes = set()
     for uevent in glob.glob("/sys/class/hidraw/hidraw*/device/uevent"):
-        text = Path(uevent).read_text()
+        try:
+            text = Path(uevent).read_text()
+        except FileNotFoundError:
+            continue  # removed since the glob (an agent took its device away on a switch)
         if "HID_NAME=passkey-tpm" not in text:
             continue
         if uid is not None and f"HID_PHYS=passkey-tpm-agent/uid={uid}" not in text.splitlines():
