@@ -6,14 +6,18 @@
 //!
 //! For users without an enrolled fingerprint the broker asks this agent to confirm presence
 //! (`PresenceRequested`, AD-022); the agent shows an Allow/Deny notification and answers
-//! with `ConfirmPresence` on the same connection that made the `Ctap` call.
+//! with `ConfirmPresence` on the same connection that made the `Ctap` call. A click on the
+//! notification allows (except for reset), and the question closes when its request ends.
 #![allow(clippy::print_stderr)]
 
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use futures_util::StreamExt;
 use passkey_tpm_agent::{Effect, Hid};
+use passkey_tpm_core::ctap2::Gesture;
 use passkey_tpm_desktop::notify::{Answer, Notification, Notifier};
 use passkey_tpm_transport_uhid::{
     fido_device_params, DeviceParams, UhidDevice, UhidEvent, UhidWriter,
@@ -96,6 +100,49 @@ fn note(summary: &str, body: &str) -> Notification {
         .timeout_ms(30_000)
 }
 
+/// Action key of the Allow button.
+const ALLOW: &str = "allow";
+/// Action key of a click on the notification itself. Servers that draw no action buttons
+/// (dunst, some panels) still send it.
+const CLICK: &str = "default";
+
+/// A presence question on screen, until its request ends.
+struct OpenPresence {
+    notification: u32,
+    /// Set once the request ended, so the answer is no longer sent to the broker.
+    retired: Arc<AtomicBool>,
+}
+
+/// The presence question for `prompt`: a relying party or a [`Gesture`] prompt.
+fn presence_note(prompt: &str) -> Notification {
+    match Gesture::from_prompt(prompt) {
+        // Clients ask every attached key at the start of each ceremony; answering picks
+        // passkey-tpm over other passkeys (a password manager, a phone), so say so.
+        Some(Gesture::Selection) => note(
+            "Use passkey-tpm for this sign-in?",
+            "Click to use the passkey stored on this computer. \
+             Ignore this to use another passkey, such as Google Password Manager.",
+        )
+        .action(CLICK, "Use passkey-tpm")
+        .action(ALLOW, "Use passkey-tpm")
+        .action("deny", "Ignore"),
+        // Destructive: only the explicit button, never a stray click.
+        Some(Gesture::Reset) => note(
+            "Reset passkey-tpm?",
+            "This deletes every passkey passkey-tpm stores for you. It can't be undone.",
+        )
+        .action(ALLOW, "Reset")
+        .action("deny", "Cancel"),
+        None => note(
+            "Allow passkey-tpm?",
+            &format!("{prompt} wants to use your passkey. Click to allow."),
+        )
+        .action(CLICK, "Allow")
+        .action(ALLOW, "Allow")
+        .action("deny", "Deny"),
+    }
+}
+
 /// Shows notifications in order on one task, so a presence question replaces the
 /// fingerprint prompt shown just before it for the same request. Presence answers are sent
 /// to the broker through `bus`.
@@ -120,9 +167,13 @@ fn notifier(bus: Connection) -> mpsc::UnboundedSender<Note> {
             }
         };
         let mut last: Option<u32> = None;
+        // A prompted request is in flight: `Fingerprint` starts one, `Close` ends it.
+        let mut active = false;
+        let mut presence: Option<OpenPresence> = None;
         while let Some(next) = rx.recv().await {
             match next {
                 Note::Fingerprint(rp) => {
+                    active = true;
                     if !has_fingerprint(&bus).await {
                         continue;
                     }
@@ -133,30 +184,47 @@ fn notifier(bus: Connection) -> mpsc::UnboundedSender<Note> {
                     last = notifier.show(&n).await.ok();
                 }
                 Note::Close => {
+                    active = false;
                     if let Some(id) = last.take() {
                         let _ = notifier.close(id).await;
                     }
+                    // The broker stopped waiting (answered, cancelled by the client or
+                    // timed out): a question still on screen could only fail.
+                    if let Some(open) = presence.take() {
+                        open.retired.store(true, Ordering::SeqCst);
+                        let _ = notifier.close(open.notification).await;
+                    }
                 }
                 Note::Presence { id, rp } => {
-                    let n = note(
-                        "Allow passkey-tpm?",
-                        &format!("{rp} wants to use your passkey."),
-                    )
-                    .action("allow", "Allow")
-                    .action("deny", "Deny")
-                    .replaces(last.take());
-                    let answer = match notifier.ask(&n).await {
-                        Ok((_, answer)) => answer,
+                    // The signal raced the end of its request: nothing left to answer.
+                    if !active {
+                        continue;
+                    }
+                    let n = presence_note(&rp).replaces(last.take());
+                    let (notification, answer) = match notifier.ask(&n).await {
+                        Ok(asked) => asked,
                         Err(e) => {
                             eprintln!("cannot show the presence notification: {e}");
                             continue;
                         }
                     };
+                    let retired = Arc::new(AtomicBool::new(false));
+                    presence = Some(OpenPresence {
+                        notification,
+                        retired: Arc::clone(&retired),
+                    });
                     let bus = bus.clone();
-                    // Wait on its own task so later prompts aren't held up. Anything but
-                    // the Allow button (Deny, a click on the text, dismissing) denies.
+                    // Wait on its own task so later prompts aren't held up. The Allow
+                    // button or (where offered) a click on the notification allows;
+                    // Deny, dismissing or expiry denies.
                     tokio::spawn(async move {
-                        let allow = answer.await == Answer::Action("allow".into());
+                        let allow = matches!(
+                            answer.await,
+                            Answer::Action(key) if key == ALLOW || key == CLICK
+                        );
+                        if retired.load(Ordering::SeqCst) {
+                            return;
+                        }
                         if let Err(e) = confirm_presence(&bus, id, allow).await {
                             eprintln!("ConfirmPresence failed: {e}");
                         }
