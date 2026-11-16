@@ -42,7 +42,7 @@ A user without a fingerprint reader, or with none enrolled, can set a PIN but th
 
 ### P1: Agent presence prompt ⭐ MVP
 
-1. WHEN the agent receives `PresenceRequested` from the broker's current owner THEN it SHALL show a notification "Allow passkey-tpm for <rp>?" with Allow/Deny actions, replacing the fingerprint prompt, and call `ConfirmPresence` with the choice (closing = deny) (PIN-10)
+1. WHEN the agent receives `PresenceRequested` from the broker's current owner THEN it SHALL show a notification "Allow passkey-tpm for <rp>?" with Allow/Deny actions (a click on the notification itself = Allow, for servers without action buttons; reset needs the explicit button), replacing the fingerprint prompt, and call `ConfirmPresence` with the choice (closing = deny). Selection is worded as optional ("ignore this to use another passkey"). WHEN the request ends first (answered, cancelled by the client, timed out) THEN the agent SHALL close the notification and send no answer (PIN-10)
 
 ### P2: Set or change the PIN from the tray
 
