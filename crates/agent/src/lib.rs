@@ -5,7 +5,7 @@
 //! to `/dev/uhid`, the broker on the system bus, and desktop notifications. The agent makes
 //! no security decisions: the broker validates everything and the TPM enforces the policy.
 
-use passkey_tpm_core::ctap2::{ClientPinSub, Command};
+use passkey_tpm_core::ctap2::{ClientPinSub, Command, Gesture};
 use passkey_tpm_core::ctaphid::{
     error_report, fragment, init_response, keepalive_report, Action, Assembler, BROADCAST_CID,
     CMD_CANCEL, CMD_CBOR, CMD_ERROR, CMD_INIT, CMD_PING, CMD_WINK, ERR_CHANNEL_BUSY,
@@ -133,8 +133,8 @@ pub fn relying_party(request: &[u8]) -> Option<String> {
                     .map_or_else(|| "passkey-tpm".to_owned(), str::to_owned)
             })
         }
-        Command::Reset => Some("reset passkey-tpm".to_owned()),
-        Command::Selection => Some("select passkey-tpm".to_owned()),
+        Command::Reset => Some(Gesture::Reset.prompt().to_owned()),
+        Command::Selection => Some(Gesture::Selection.prompt().to_owned()),
         _ => None,
     }
 }

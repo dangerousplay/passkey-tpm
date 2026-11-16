@@ -15,6 +15,36 @@ use crate::evidence::{Presence, UvEvidence};
 use crate::pin_protocol::{self, Protocol};
 use crate::tpm_iface::{RpIdHash, TpmOps, Uid};
 
+/// A request that needs only a gesture, not a relying party. Its prompt text stands in for
+/// the relying party in [`Pending::rp_id`] and in the broker's `PresenceRequested` signal,
+/// so the agent can tell the two apart from a real relying party.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gesture {
+    /// authenticatorReset.
+    Reset,
+    /// authenticatorSelection: the client asks which attached key the user wants.
+    Selection,
+}
+
+impl Gesture {
+    /// The prompt sent in place of a relying party.
+    #[must_use]
+    pub const fn prompt(self) -> &'static str {
+        match self {
+            Self::Reset => "reset passkey-tpm",
+            Self::Selection => "select passkey-tpm",
+        }
+    }
+
+    /// The gesture whose [`Gesture::prompt`] is `prompt`, if any.
+    #[must_use]
+    pub fn from_prompt(prompt: &str) -> Option<Self> {
+        [Self::Reset, Self::Selection]
+            .into_iter()
+            .find(|g| g.prompt() == prompt)
+    }
+}
+
 /// Per-request facts the core can't discover itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UserInfo {
@@ -156,11 +186,14 @@ impl<T: TpmOps> Authenticator<T> {
                 .credential_management(uid, params, now_ms)
                 .map(Step::Done),
             Command::Reset => {
-                Self::need_gesture(uid, user, "reset passkey-tpm", PendingKind::Reset)
+                Self::need_gesture(uid, user, Gesture::Reset.prompt(), PendingKind::Reset)
             }
-            Command::Selection => {
-                Self::need_gesture(uid, user, "select passkey-tpm", PendingKind::Selection)
-            }
+            Command::Selection => Self::need_gesture(
+                uid,
+                user,
+                Gesture::Selection.prompt(),
+                PendingKind::Selection,
+            ),
         };
         result.unwrap_or_else(|code| Step::Done(error(code)))
     }

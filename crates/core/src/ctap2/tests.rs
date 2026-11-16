@@ -1646,3 +1646,13 @@ proptest! {
         let _ = a.prepare(ALICE, ENROLLED, &r, 0);
     }
 }
+
+#[test]
+fn gesture_prompts_round_trip_and_never_match_a_relying_party() {
+    use super::Gesture;
+    for g in [Gesture::Reset, Gesture::Selection] {
+        assert_eq!(Gesture::from_prompt(g.prompt()), Some(g));
+    }
+    // A relying party ID is a domain: it can't contain a space.
+    assert_eq!(Gesture::from_prompt("example.com"), None);
+}
