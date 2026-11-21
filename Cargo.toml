@@ -33,7 +33,7 @@ getrandom = "0.4"
 hkdf = "0.13"
 hmac = "0.13"
 minijinja = { version = "3", default-features = false }
-nix = { version = "0.31", default-features = false }
+nix = { version = "0.32", default-features = false }
 p256 = { version = "0.14", default-features = false }
 proptest = { version = "1.12", default-features = false }
 serde = { version = "1", default-features = false }
