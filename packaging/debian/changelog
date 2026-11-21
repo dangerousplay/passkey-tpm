@@ -1,3 +1,9 @@
+passkey-tpm (0.1.0~beta.4-1) unstable; urgency=medium
+
+  * Fourth beta: clickable presence prompts, one tray icon per session.
+
+ -- Davi Henrique <dangerousplay715@gmail.com>  Sat, 21 Nov 2026 00:00:00 +0000
+
 passkey-tpm (0.1.0~beta.3-1) unstable; urgency=medium
 
   * Third beta: Firefox sign-in with a username, PIN-only prompts (#5).
