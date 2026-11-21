@@ -4,6 +4,11 @@
 # recipe). `cargo xtask version --check` fails when a rendered file is out of date.
 
 [[release]]
+version = "0.1.0-beta.4"
+date = "2026-11-21"
+summary = "Fourth beta: clickable presence prompts, one tray icon per session"
+
+[[release]]
 version = "0.1.0-beta.3"
 date = "2026-11-04"
 summary = "Third beta: Firefox sign-in with a username, PIN-only prompts (#5)"
