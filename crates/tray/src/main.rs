@@ -19,8 +19,13 @@ use passkey_tpm_tray::{
 use passkey_tpm_uv::fprintd;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use zbus::fdo::{RequestNameFlags, RequestNameReply};
 use zbus::Connection;
 
+/// Session-bus name held by the running tray, so a second launch (autostart plus a
+/// window-manager script, a WM restart re-running `exec_always`, ...) exits instead of
+/// showing a second icon.
+const SINGLE_INSTANCE_NAME: &str = "io.github.dangerousplay.PasskeyTpm1.Tray";
 /// Periodic status refresh.
 const REFRESH: Duration = Duration::from_secs(10);
 /// Bound on one enrollment, including the polkit dialog.
@@ -336,6 +341,22 @@ async fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    match session
+        .request_name_with_flags(SINGLE_INSTANCE_NAME, RequestNameFlags::DO_NOT_QUEUE)
+        .await
+    {
+        Ok(RequestNameReply::PrimaryOwner | RequestNameReply::AlreadyOwner) => {}
+        // zbus reports `Exists` as `Error::NameTaken`.
+        Ok(RequestNameReply::Exists | RequestNameReply::InQueue) | Err(zbus::Error::NameTaken) => {
+            eprintln!("passkey-tpm-tray is already running");
+            return ExitCode::SUCCESS;
+        }
+        Err(e) => {
+            eprintln!("cannot claim {SINGLE_INSTANCE_NAME}: {e}");
+            return ExitCode::FAILURE;
+        }
+    }
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     let app = TrayApp {
